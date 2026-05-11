@@ -285,6 +285,12 @@ function VFN.UI:Button(parent, text, font)
     if button.SetText then button:SetText(text or "") end
     VFN.Theme:Register(button, "Button")
     applyFontRole(button, font)
+    -- Universal state mutator. Used by the BindingEngine to push `active`
+    -- (and any future flags) from selectors. The skinner reads state from
+    -- VFN.Theme.states[widget] and combines it with the design-time variant
+    -- stashed at construction. See Theme.Skinners.Button.
+    function button:SetState(updates) VFN.Theme:SetState(self, updates) end
+    function button:SetActive(value) VFN.Theme:SetState(self, { active = value and true or false }) end
     -- Intrinsic width = text width + ~28px padding for left/right chrome.
     -- Read by the layout engine when spec.width == "auto"; ignored otherwise.
     -- Buttons whose text changes (cycle buttons) should call RefreshIntrinsicWidth
@@ -299,11 +305,32 @@ function VFN.UI:Button(parent, text, font)
     return button
 end
 
+-- Unified `button` LayoutRegistry entry. One spec kind, four internal
+-- shapes routed by options:
+--
+--   options.close = true            -> close-style (X icon, no template)
+--   options.atlas + options.activeAtlas -> toggle (two-base atlas swap)
+--   options.atlas (no activeAtlas)  -> atlas (single-base, 3-suffix atlases)
+--   (no options.atlas)              -> text button (UIPanelButtonTemplate)
+--
+-- Text buttons participate in the variant + state.active model from #10.3.
+-- Icon buttons keep their existing SetActive (atlas swap) -- different
+-- physical mechanism but the same conceptual flag.
 if VFN.LayoutRegistry and VFN.LayoutRegistry.Register then
     VFN.LayoutRegistry:Register("button", function(parent, spec)
+        local opts = spec.options or {}
+        if opts.close then
+            return VFN.UI:CloseButton(parent, opts)
+        elseif opts.atlas and opts.activeAtlas then
+            return VFN.UI:ToggleButton(parent, opts)
+        elseif opts.atlas then
+            return VFN.UI:AtlasButton(parent, opts)
+        end
+        -- Text-button path: standard template + variant identity.
         local button = VFN.UI:Button(parent, spec.text or "", spec.font)
-        if button and spec.variant then
-            VFN.Theme:RegisterVariant(button, "Button", spec.variant)
+        if button then
+            button._vfnVariant = spec.variant or "default"
+            if VFN.Theme and VFN.Theme.Apply then VFN.Theme:Apply(button, "Button") end
         end
         return button
     end)
@@ -347,11 +374,9 @@ function VFN.UI:CloseButton(parent, opts)
     return button
 end
 
-if VFN.LayoutRegistry and VFN.LayoutRegistry.Register then
-    VFN.LayoutRegistry:Register("closebutton", function(parent, spec)
-        return VFN.UI:CloseButton(parent, spec.options or {})
-    end)
-end
+-- (Legacy `closebutton` kind retired in #10.6 -- use kind="button" with
+--  options.close = true. The VFN.UI:CloseButton constructor stays as an
+--  internal helper called by the unified `button` LayoutRegistry entry.)
 
 -- ===== IconButton: 3-state Blizzard atlas button (HDG MakeIconButton pattern)
 -- Use for header tab toggles where an icon reads cleaner than a text label.
@@ -449,14 +474,10 @@ function VFN.UI:ToggleButton(parent, opts)
     return button
 end
 
-if VFN.LayoutRegistry and VFN.LayoutRegistry.Register then
-    VFN.LayoutRegistry:Register("atlasButton", function(parent, spec)
-        return VFN.UI:AtlasButton(parent, spec.options or {})
-    end)
-    VFN.LayoutRegistry:Register("toggleButton", function(parent, spec)
-        return VFN.UI:ToggleButton(parent, spec.options or {})
-    end)
-end
+-- (Legacy `atlasButton` and `toggleButton` kinds retired in #10.6 -- use
+--  kind="button" with options.atlas (and options.activeAtlas for toggles).
+--  The VFN.UI:AtlasButton and :ToggleButton constructors stay as internal
+--  helpers called by the unified `button` LayoutRegistry entry.)
 
 function VFN.UI:EditBox(parent, opts, font)
     opts = opts or {}
@@ -779,10 +800,11 @@ if VFN.LayoutRegistry and VFN.LayoutRegistry.Register then
 end
 
 -- ===== Status chip: small text pill painted by Theme.Skinners.StatusChip ==
--- Used inline within row factories AND as a standalone widget. Construction
--- is plain: a Frame with a bg texture + centred fontstring. The Skinner
--- reads `_vfnChipBg` / `_vfnChipText` references stashed on the frame.
-function VFN.UI:Chip(parent, text, variant)
+-- A chip's "status" is data-driven semantic category (ready/blocked/has_note
+-- /source/default) -- not a design-time color family like a button's variant.
+-- The Skinner reads `_vfnChipBg` / `_vfnChipText` references stashed on the
+-- frame plus the current status to pick the tint.
+function VFN.UI:Chip(parent, text, status)
     if not (parent and CreateFrame) then return nil end
     local frame = CreateFrame("Frame", nil, parent)
     if frame.SetHeight then frame:SetHeight(16) end
@@ -804,17 +826,18 @@ function VFN.UI:Chip(parent, text, variant)
         frame._vfnChipText = fs
     end
 
-    function frame:SetVariant(v) VFN.Theme:Register(self, "StatusChip", { variant = v }) end
+    function frame:SetStatus(s) VFN.Theme:SetState(self, { status = s }) end
+    function frame:SetState(updates) VFN.Theme:SetState(self, updates) end
     function frame:SetChipText(t) if self._vfnChipText then self._vfnChipText:SetText(t or "") end end
 
-    VFN.Theme:Register(frame, "StatusChip", { variant = variant or "ready" })
+    VFN.Theme:Register(frame, "StatusChip", { status = status or "ready" })
     return frame
 end
 
 if VFN.LayoutRegistry and VFN.LayoutRegistry.Register then
     VFN.LayoutRegistry:Register("chip", function(parent, spec)
         local opts = spec.options or {}
-        return VFN.UI:Chip(parent, spec.text or opts.text or "", opts.variant)
+        return VFN.UI:Chip(parent, spec.text or opts.text or "", opts.status or opts.variant)
     end)
 end
 

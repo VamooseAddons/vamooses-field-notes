@@ -305,24 +305,14 @@ end
 --   1. EnsureSelectedGroup / EnsureSelectedEntry -- self-healing writes
 --      that pick a default selection when the previous one is stale. These
 --      mutate state, so they can't live in a (pure) selector.
---   2. mapPreviewButton variant -- Button factory doesn't expose SetVariant,
---      so we route through Theme:RegisterVariant. Same fix as the filter
---      chips: until Button grows variant support OR these become kind="chip",
---      the paint stays here.
---   3. coordinateList / sourceLineList show/hide -- bindings handle the
---      list items, but the visibility toggle is imperative.
+--   2. coordinateList / sourceLineList show/hide -- bindings handle items,
+--      but the visibility toggle is imperative (it's a per-widget Hide/Show
+--      call, not a value push).
 function DetailController:Refresh(rootFrame, ctx)
     ctx = ctx or {}
     local hasSelection = ctx.hasSelection == true
     local _, set = GetSelectedSet()
     local ui = GetUI()
-
-    local map = ui.map
-    local mapShown = not map or map.shown ~= false
-    local mapBtn = W(rootFrame, "mainPanel.mapPreviewButton")
-    if mapBtn and VFN.Theme and VFN.Theme.RegisterVariant then
-        VFN.Theme:RegisterVariant(mapBtn, "Button", mapShown and "primary" or "tertiary")
-    end
 
     if not hasSelection then return end
 

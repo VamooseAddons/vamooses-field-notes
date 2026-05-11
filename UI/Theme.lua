@@ -172,11 +172,33 @@ VFN.Theme.Skinners = {
         setBackdropBorderColor(frame, VFN.Theme:GetColor("border.default"))
     end,
 
-    Button = function(button, _scheme)
+    -- Button: combines design-time variant (immutable, stashed on the widget
+    -- at construction) with runtime state.active (mutable, from bindings via
+    -- SetActive / SetState). One paint pass reads both. There is no separate
+    -- variant-overlay step for buttons anymore -- the Theme.Variants table
+    -- still exists for other widget kinds, but Button bakes its variant once.
+    --
+    -- State shape: { active = bool }. Active wins paint -- the button reads
+    -- as the "selected/on" treatment regardless of variant family. Variants:
+    --   primary / danger / tertiary / ghost / default (default when missing)
+    Button = function(button, _scheme, state)
+        local variant = button._vfnVariant or "default"
+        local active  = state and state.active and true or false
         setBackdrop(button, VFN.Theme.BACKDROP_FLAT)
-        setBackdropColor(button, VFN.Theme:GetColor("button.default.bg.normal"))
-        setBackdropBorderColor(button, VFN.Theme:GetColor("button.default.border.normal"))
-        setTextColor(button, VFN.Theme:GetColor("button.default.text.normal"))
+        if active then
+            local accent = VFN.Theme:GetColor("semantic.accent")
+            local inverse = VFN.Theme:GetColor("text.inverse")
+            setBackdropColor(button, { r = accent.r, g = accent.g, b = accent.b, a = 0.85 })
+            setBackdropBorderColor(button, accent)
+            setTextColor(button, inverse)
+        else
+            local bg     = VFN.Theme:GetColor("button." .. variant .. ".bg.normal")     or VFN.Theme:GetColor("button.default.bg.normal")
+            local border = VFN.Theme:GetColor("button." .. variant .. ".border.normal") or VFN.Theme:GetColor("button.default.border.normal")
+            local text   = VFN.Theme:GetColor("button." .. variant .. ".text.normal")   or VFN.Theme:GetColor("button.default.text.normal")
+            setBackdropColor(button, bg)
+            setBackdropBorderColor(button, border)
+            setTextColor(button, text)
+        end
     end,
 
     Text = function(text, _scheme)
@@ -317,18 +339,20 @@ VFN.Theme.Skinners = {
         tex:SetColorTexture(c.r, c.g, c.b, c.a or 1)
     end,
 
-    -- StatusChip: small text-chip painted by status-chip variant. Used by
-    -- library card rows + coord preview rows. State: { variant }.
+    -- StatusChip: small text-chip painted by status-chip semantic category.
+    -- Used by library card rows + coord preview rows. State: { status }.
     --   "ready"    -> success (teal)   tint + text
     --   "blocked"  -> error (magenta)  tint + text
     --   "has_note" -> warning (amber)  tint + text
     --   "source"   -> accent (blue)    tint + text
     --   "default"  -> text.dim         tint + text (low contrast, library marker)
     -- The chip widget is a Frame with { bg = texture, text = fontstring }
-    -- on it; this skinner reads variant and paints both.
+    -- on it; this skinner reads status and paints both.
     StatusChip = function(chip, _scheme, state)
         if not (chip and chip._vfnChipBg and chip._vfnChipText) then return end
-        local variant = (state and state.variant) or "ready"
+        -- Back-compat: accept either status (new name) or variant (legacy)
+        -- so unmigrated call sites keep working while we sweep them.
+        local status = (state and (state.status or state.variant)) or "ready"
         local roleColor = {
             ready    = VFN.Theme:GetColor("semantic.success"),
             blocked  = VFN.Theme:GetColor("semantic.error"),
@@ -336,7 +360,7 @@ VFN.Theme.Skinners = {
             source   = VFN.Theme:GetColor("semantic.accent"),
             default  = VFN.Theme:GetColor("text.dim"),
         }
-        local c = roleColor[variant] or roleColor.ready
+        local c = roleColor[status] or roleColor.ready
         if chip._vfnChipBg.SetColorTexture then
             chip._vfnChipBg:SetColorTexture(c.r, c.g, c.b, 0.18)
         end
@@ -463,6 +487,30 @@ function VFN.Theme:ApplyAll()
     for widget, widgetType in pairs(self.registry) do
         self:Apply(widget, widgetType)
     end
+end
+
+-- Merge updates into the widget's stored state and re-apply the skinner.
+-- Universal mutation point for runtime state -- replaces ad-hoc patterns
+-- like Theme:Register(..., { variant = "X" }) (which works but reads as
+-- registering rather than mutating) and ad-hoc setters that re-register
+-- the whole state object. Used by widget:SetState() in factories.
+--
+-- The state arg merges field-by-field, so SetState({ active = true })
+-- doesn't wipe selected=true previously set on the same widget. Use nil
+-- to clear a field: SetState({ active = nil }) -- BUT Lua tables don't
+-- distinguish absent-from-table from key=nil, so passing nil values has
+-- no effect; explicitly set to false instead.
+function VFN.Theme:SetState(widget, updates)
+    if not widget then return end
+    local widgetType = self.registry[widget]
+    if not widgetType then return end
+    self.states = self.states or setmetatable({}, { __mode = "k" })
+    local current = self.states[widget] or {}
+    if type(updates) == "table" then
+        for k, v in pairs(updates) do current[k] = v end
+    end
+    self.states[widget] = current
+    self:Apply(widget, widgetType)
 end
 
 -- Variant skinning: apply a base skin then a variant overlay. Variants live

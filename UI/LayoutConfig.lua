@@ -473,7 +473,7 @@ VFN.LayoutConfig = {
         -- on Refresh). Click toggles -- click again on the active view
         -- returns to detail/collapsed.
         ["streamPanel.captureButton"] = {
-            kind = "toggleButton", ["in"] = "streamPanel", slot = "header",
+            kind = "button", ["in"] = "streamPanel", slot = "header",
             width = 24, height = 24, order = 50,
             -- Two-base atlas: arrow-down for "minimize me", arrow-up for
             -- "expand me back." Active state (view = capture) swaps to up.
@@ -491,7 +491,7 @@ VFN.LayoutConfig = {
         -- just the stream rail." Right arrow = "we're already collapsed."
         -- pi/2 radians clockwise = -math.pi/2 in WoW's flipped Y space.
         ["streamPanel.backButton"] = {
-            kind = "toggleButton", ["in"] = "streamPanel", slot = "header",
+            kind = "button", ["in"] = "streamPanel", slot = "header",
             width = 24, height = 24, order = 60,
             options = {
                 atlas = "housing-stair-arrow-down",     -- rotated: points left
@@ -503,7 +503,7 @@ VFN.LayoutConfig = {
             binding = { active = "stream.backActive" },
         },
         ["streamPanel.libraryButton"] = {
-            kind = "atlasButton", ["in"] = "streamPanel", slot = "header",
+            kind = "button", ["in"] = "streamPanel", slot = "header",
             width = 24, height = 24, order = 20,
             -- List icon -- "library" reads as a list of saved sets.
             -- Hidden in capture mode -- minimal view keeps just Expand + close.
@@ -512,7 +512,7 @@ VFN.LayoutConfig = {
             binding = { active = "stream.libraryActive" },
         },
         ["streamPanel.configButton"] = {
-            kind = "atlasButton", ["in"] = "streamPanel", slot = "header",
+            kind = "button", ["in"] = "streamPanel", slot = "header",
             width = 24, height = 24, order = 30,
             -- Cog -- mirrors HDG HouseTab's Customise / Settings toggle.
             visibleInViews = { "collapsed", "detail", "library", "config" },
@@ -520,9 +520,9 @@ VFN.LayoutConfig = {
             binding = { active = "stream.configActive" },
         },
         ["streamPanel.closeButton"] = {
-            kind = "closebutton", ["in"] = "streamPanel", slot = "header",
+            kind = "button", ["in"] = "streamPanel", slot = "header",
             width = 22, height = 22, order = 10,
-            options = { atlas = "XMarksTheSpot", iconSize = 14 },
+            options = { close = true, atlas = "XMarksTheSpot", iconSize = 14 },
         },
 
         ["mainPanel.title"] = {
@@ -658,7 +658,7 @@ VFN.LayoutConfig = {
         -- Back arrow is leftmost (icon-style toggle matching the stream-panel
         -- arrows), title fills the middle, Delete Set is rightmost (magenta).
         ["mainPanel.backButton"] = {
-            kind = "toggleButton", ["in"] = "mainPanel", slot = "header",
+            kind = "button", ["in"] = "mainPanel", slot = "header",
             width = 24, height = 24, order = 5,
             options = {
                 atlas = "housing-stair-arrow-down",     -- rotated: points left
@@ -686,6 +686,7 @@ VFN.LayoutConfig = {
         ["mainPanel.mapPreviewButton"] = {
             kind = "button", ["in"] = "main.coordBar", font = "button",
             text = "Map Preview", width = "auto", order = 10, variant = "tertiary",
+            binding = { active = "detail.mapPreviewActive" },
         },
         ["mainPanel.sourceToggleButton"] = {
             kind = "button", ["in"] = "main.coordBar", font = "button",
@@ -833,23 +834,29 @@ VFN.LayoutConfig = {
             text = "Recent", width = 80, height = 22, order = 20, variant = "tertiary",
             binding = { text = "library.sortLabel" },
         },
-        -- Filter chips -- variant carries semantic colour (see Theme.Skinners.StatusChip).
-        -- Controller toggles the active chip via SetVariant.
+        -- Filter chips -- design-time identity is variant="tertiary" (standard
+        -- button family). Which chip is currently the active filter flows
+        -- through `binding = { active = "library.filterXActive" }` -- the
+        -- Button skinner combines variant + active into one paint.
         ["libraryPanel.filterAll"] = {
             kind = "button", ["in"] = "library.filterRow", font = "caption",
             text = "All", width = "auto", height = 20, order = 10, variant = "tertiary",
+            binding = { active = "library.filterAllActive" },
         },
         ["libraryPanel.filterReady"] = {
             kind = "button", ["in"] = "library.filterRow", font = "caption",
             text = "Ready", width = "auto", height = 20, order = 20, variant = "tertiary",
+            binding = { active = "library.filterReadyActive" },
         },
         ["libraryPanel.filterHasNote"] = {
             kind = "button", ["in"] = "library.filterRow", font = "caption",
             text = "Has Note", width = "auto", height = 20, order = 30, variant = "tertiary",
+            binding = { active = "library.filterHasNoteActive" },
         },
         ["libraryPanel.filterBlocked"] = {
             kind = "button", ["in"] = "library.filterRow", font = "caption",
             text = "Blocked", width = "auto", height = 20, order = 40, variant = "tertiary",
+            binding = { active = "library.filterBlockedActive" },
         },
         ["libraryPanel.cardsList"] = {
             kind = "scrollbox", ["in"] = "library.cards",

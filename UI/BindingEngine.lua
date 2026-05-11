@@ -74,11 +74,9 @@ function Engine.Dispatchers.button(widget, values)
     end
 end
 
--- Header-row toggle / atlas icon buttons: same dispatcher as `button`
--- (text/enabled/active fields), since SetActive is the common contract.
-Engine.Dispatchers.toggleButton = Engine.Dispatchers.button
-Engine.Dispatchers.atlasButton  = Engine.Dispatchers.button
-Engine.Dispatchers.closebutton  = Engine.Dispatchers.button
+-- (Legacy kind aliases removed in #10.6. All button shapes -- text, atlas,
+--  toggle, close -- ship under one `kind = "button"` with options.atlas /
+--  options.activeAtlas / options.close picking the internal shape.)
 
 function Engine.Dispatchers.editbox(widget, values)
     if values.text == nil or not widget.SetText then return end
@@ -94,7 +92,9 @@ end
 
 function Engine.Dispatchers.chip(widget, values)
     if values.text ~= nil and widget.SetChipText then widget:SetChipText(tostring(values.text)) end
-    if values.variant ~= nil and widget.SetVariant then widget:SetVariant(values.variant) end
+    -- Chip's data-driven category is `status` (ready / blocked / has_note /
+    -- source / default). Different concept from button's design-time variant.
+    if values.status ~= nil and widget.SetStatus then widget:SetStatus(values.status) end
 end
 
 function Engine.Dispatchers.statCard(widget, values)

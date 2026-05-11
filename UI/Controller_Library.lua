@@ -249,7 +249,7 @@ local function renderRowChips(row, chips)
         end
         if chip then
             chip:SetChipText(labelText)
-            chip:SetVariant(variant)
+            chip:SetStatus(variant)
             if chip.ClearAllPoints then chip:ClearAllPoints() end
             if chip.SetPoint then
                 if not prev then
@@ -561,47 +561,19 @@ function LibraryController:Wire(rootFrame)
 end
 
 -- ===== Refresh ==============================================================
-
--- Paint filter-chip selection: the active filter gets variant "primary",
--- inactive get "tertiary". Sort label syncs with viewLocal.sortOrder.
-local function PaintFilterChips(rootFrame, activeFilter)
-    for _, filter in ipairs(FILTERS) do
-        local widgetId = "libraryPanel.filter" ..
-            (filter == "has_note" and "HasNote" or (filter:sub(1, 1):upper() .. filter:sub(2)))
-        local btn = W(rootFrame, widgetId)
-        if btn and btn.SetVariant then
-            btn:SetVariant(filter == activeFilter and "primary" or "tertiary")
-        end
-    end
-end
-
--- Refresh is now imperative-only -- all widget value pushes (scrollbox
--- items, label text, stat cards, button enabled, edit-box text) flow
--- through the BindingEngine via the widget specs' `binding` field. What
--- remains here is the two pieces of imperative state that can't (yet) be
--- expressed as a pure-data binding:
 --
---   1. selectedLibraryID fallback -- if the user's pick is stale, write the
---      defaultLibraryID into viewLocal. Bindings are read-only so they
---      can't make this self-healing write.
---   2. Filter-chip variant paint -- the filter widgets are kind="button",
---      and Button factory doesn't expose SetVariant. The binding fires but
---      the button's dispatcher silently ignores the variant field. Until
---      these widgets get migrated to kind="chip" (or Button grows a
---      variant method), PaintFilterChips stays imperative.
-function LibraryController:Refresh(rootFrame, ctx)
+-- Refresh handles only the one piece of state-shape healing that bindings
+-- can't express (a pure read-only selector can't write state). Everything
+-- else -- card list, stat values, label text, button enabled/active, edit-
+-- box content -- flows through bindings.
+function LibraryController:Refresh(_rootFrame, ctx)
     local state = (ctx and ctx.state) or CH.Mechanics.GetState()
     if not state then return end
-
     local libUI = CH.Mechanics.GetViewLocal("library")
     local libs = state.account.libraries or {}
     if not (libUI.selectedLibraryID and libs[libUI.selectedLibraryID]) then
         CH.Mechanics.DispatchViewLocal("library", "selectedLibraryID", state.account.defaultLibraryID)
     end
-
-    -- Filter-chip variants. Once the filter widgets become kind="chip", this
-    -- whole block deletes -- the bindings on each chip already exist.
-    PaintFilterChips(rootFrame, GetFindState().filter)
 end
 
 VFN.Controllers:Register("library", LibraryController)

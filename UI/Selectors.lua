@@ -916,3 +916,27 @@ Selectors:Register("drawer.currentCardMap",    function(state) return drawerCard
 Selectors:Register("drawer.currentCardCoords", function(state) return drawerCard(state).coords or "" end)
 Selectors:Register("drawer.currentCardNote",   function(state) return drawerCard(state).note   or "" end)
 Selectors:Register("drawer.currentCardSource", function(state) return drawerCard(state).source or "" end)
+
+-- ===========================================================================
+-- Detail tab: mapPreviewButton active state (was Theme:RegisterVariant)
+-- ===========================================================================
+
+Selectors:Register("detail.mapPreviewActive", function(state)
+    local map = state.account.ui.map
+    return not map or map.shown ~= false
+end)
+
+-- ===========================================================================
+-- Library tab: per-filter-chip active state (was PaintFilterChips imperative)
+-- ===========================================================================
+
+local function libFilterIs(name)
+    return function(state)
+        local lib = libUI(state)
+        return (lib.activeFilter or "all") == name
+    end
+end
+Selectors:Register("library.filterAllActive",     libFilterIs("all"))
+Selectors:Register("library.filterReadyActive",   libFilterIs("ready"))
+Selectors:Register("library.filterHasNoteActive", libFilterIs("has_note"))
+Selectors:Register("library.filterBlockedActive", libFilterIs("blocked"))
