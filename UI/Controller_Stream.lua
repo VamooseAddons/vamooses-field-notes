@@ -360,12 +360,55 @@ local function ToggleView(target)
     end
 end
 
+-- Library dropdown above the stream list -- click pops a context menu of
+-- every non-deleted library; selecting one writes the choice into
+-- viewLocal.stream.libraryID and BuildStreamItems re-filters.
+local function ShowStreamLibraryMenu(ownerFrame)
+    local state = CH.Mechanics.GetState()
+    if not (state and state.account) then return end
+    local libs = state.account.libraries or {}
+    local defaultID = state.account.defaultLibraryID
+
+    local entries = {}
+    for libID, lib in pairs(libs) do
+        if not lib.deletedAt then
+            entries[#entries + 1] = {
+                id = libID, name = lib.name or "?",
+                isDefault = lib.isDefault == true,
+                count = lib.setIDs and #lib.setIDs or 0,
+            }
+        end
+    end
+    table.sort(entries, function(a, b)
+        if a.isDefault ~= b.isDefault then return a.isDefault end
+        return a.name:lower() < b.name:lower()
+    end)
+
+    local items = { { text = "Stream library", isTitle = true } }
+    for _, e in ipairs(entries) do
+        local libID = e.id
+        items[#items + 1] = {
+            text = string.format("%s%s  (%d)",
+                e.name, e.isDefault and "  [Default]" or "", e.count),
+            callback = function()
+                -- Default = nil sentinel so a fresh session falls back cleanly.
+                CH.Mechanics.DispatchViewLocal("stream", "libraryID",
+                    (libID == defaultID) and nil or libID)
+            end,
+        }
+    end
+    CH.UI.ShowMenu(ownerFrame, items)
+end
+
 function StreamController:Wire(rootFrame)
     CH.UI.OnClick(rootFrame, "captureForm.sendButton",            function() Send(rootFrame) end)
     CH.UI.OnClick(rootFrame, "captureForm.currentLocationButton", function() UseCurrentLocation(rootFrame) end)
     CH.UI.OnClick(rootFrame, "streamPanel.captureButton", ToggleView("capture"))
     CH.UI.OnClick(rootFrame, "streamPanel.libraryButton", ToggleView("library"))
     CH.UI.OnClick(rootFrame, "streamPanel.configButton",  ToggleView("config"))
+    CH.UI.OnClick(rootFrame, "streamPanel.libraryDropdown", function(btn)
+        ShowStreamLibraryMenu(btn)
+    end)
     -- Bidirectional toggle:
     --   atStream  (arrow points right) -> click opens the most recent set's
     --                                     detail (top of the stream list).
@@ -398,7 +441,7 @@ function StreamController:Wire(rootFrame)
             local sourceText = Trim(GetWidgetText(sourceBox))
             local sourceLabel = W(rootFrame, "captureForm.sourceLabel")
             if sourceText == "" then
-                SetDraftStatus(rootFrame, "Paste coordinates, then click Save.")
+                SetDraftStatus(rootFrame, "Paste coordinates, then click Send Waypoints.")
                 if sourceLabel and sourceLabel.SetHint then sourceLabel:SetHint("") end
                 return
             end
@@ -428,6 +471,22 @@ function StreamController:Refresh(rootFrame, ctx)
 
     local list = W(rootFrame, "streamPanel.streamList")
     if list and list.SetItems then list:SetItems(items, true) end
+
+    -- Library-dropdown label: name of the library whose cards the selector
+    -- just walked. Mirrors BuildStreamItems' own resolution (viewLocal
+    -- override falls back to defaultLibraryID when nil or stale).
+    do
+        local state = ctx and ctx.state
+        local libs = (state and state.account and state.account.libraries) or {}
+        local viewLib = (state and state.session and state.session.viewLocal
+            and state.session.viewLocal.stream
+            and state.session.viewLocal.stream.libraryID) or nil
+        local libID = (viewLib and libs[viewLib] and not libs[viewLib].deletedAt)
+            and viewLib or (state and state.account and state.account.defaultLibraryID)
+        local name = (libID and libs[libID] and libs[libID].name) or "Library"
+        local dropdown = W(rootFrame, "streamPanel.libraryDropdown")
+        CH.UI.SetButtonText(dropdown, name .. "  v")
+    end
 
     -- Active-view marker on the switcher buttons. Tertiary buttons don't
     -- have a built-in "selected" state, so we prefix the label with `[v] `

@@ -115,12 +115,15 @@ VFN.LayoutConfig = {
             },
             -- "capture" view: minimal Paste-like floating utility. Just the
             -- streamPanel's capture form -- no history list, no detail rail,
-            -- no library/config workspace. Window shrinks vertically to fit
-            -- the form. Reuses the same cell layout as collapsed.
+            -- no library/config workspace. Window height matches the form's
+            -- fixed-height widgets (status + labels + sourceBox 160 + noteBox
+            -- 40 + actions 24 + padding/gaps + panel header). No flex
+            -- widgets here, so the window is sized to content directly --
+            -- if you add a widget, bump this.
             capture = {
                 explicit = true,
                 width  = 384,
-                height = 420,
+                height = 376,
                 columns = { 360 },
                 rows = { "fill" },
                 cells = { rail = { col = 1, row = 1 } },
@@ -553,7 +556,7 @@ VFN.LayoutConfig = {
         -- so the eye catches it as a status notification, not body text.
         ["captureForm.status"] = {
             kind = "statusBanner", ["in"] = "stream.capture", font = "body",
-            text = "Paste coordinates, then click Save or Save + Send.",
+            text = "Paste coordinates, then click Send Waypoints.",
             height = 24, order = 1,
         },
         -- Title field hidden in capture mode -- the minimal-view goal is "paste
@@ -618,9 +621,22 @@ VFN.LayoutConfig = {
         },
 
         -- ===== Stream list =====
+        -- Header row: library dropdown (LEFT, flex) + count subtitle (RIGHT).
+        ["stream.streamListHeader"] = {
+            ["in"] = "stream.streamList",
+            layout = "horizontal",
+            height = 22,
+            gap = "md",
+            order = 5,
+        },
+        ["streamPanel.libraryDropdown"] = {
+            kind = "button", ["in"] = "stream.streamListHeader", font = "button",
+            text = "Default", width = "auto", height = 20, order = 10, variant = "tertiary",
+        },
         ["streamPanel.streamStatus"] = {
-            kind = "labelDim", ["in"] = "stream.streamList", font = "small",
-            justifyH = "RIGHT", height = 14, order = 5, text = "no saved field notes",
+            kind = "labelDim", ["in"] = "stream.streamListHeader", font = "small",
+            justifyH = "RIGHT", width = "fill", height = 14, order = 20,
+            text = "no saved field notes",
         },
         ["streamPanel.streamList"] = {
             kind = "scrollbox", ["in"] = "stream.streamList",

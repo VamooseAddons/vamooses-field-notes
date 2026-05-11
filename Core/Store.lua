@@ -89,6 +89,11 @@ local function NewSessionViewLocal()
             activeFilter = "all",              -- "all" | "ready" | "has_note" | "blocked"
             sortOrder    = "recent",           -- "recent" | "alpha" | "size"
         },
+        stream  = {
+            -- Which library's cards the stream-history list shows. nil =
+            -- defaultLibraryID (matches the legacy behaviour).
+            libraryID = nil,
+        },
         config  = {},
     }
 end

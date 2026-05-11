@@ -489,7 +489,21 @@ function Selectors.BuildStreamItems(state, currentCharacter)
         knownCharacters[#knownCharacters + 1] = character
     end
 
-    local visibleIDs = (VFN.Store and VFN.Store.GetVisibleSetIDs and VFN.Store:GetVisibleSetIDs()) or {}
+    -- Stream-view library override: viewLocal.stream.libraryID picks which
+    -- library's cards to show. Falls back to the default library (legacy).
+    local streamLib = (state.session and state.session.viewLocal
+        and state.session.viewLocal.stream
+        and state.session.viewLocal.stream.libraryID) or nil
+    local libraries = state.account.libraries or {}
+    local activeLibraryID = (streamLib and libraries[streamLib] and not libraries[streamLib].deletedAt)
+        and streamLib or state.account.defaultLibraryID
+
+    local visibleIDs
+    if activeLibraryID and libraries[activeLibraryID] then
+        visibleIDs = libraries[activeLibraryID].setIDs or {}
+    else
+        visibleIDs = (VFN.Store and VFN.Store.GetVisibleSetIDs and VFN.Store:GetVisibleSetIDs()) or {}
+    end
     for _, setID in ipairs(visibleIDs) do
         local set = sets[setID]
         if set and not set.deletedAt
