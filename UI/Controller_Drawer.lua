@@ -215,25 +215,10 @@ function DrawerController:Refresh(rootFrame, ctx)
         end
     end
 
-    -- Drawer header reflects current group / pin count.
-    local titleW = W(rootFrame, "drawerPanel.title")
-    if titleW and titleW.SetText then titleW:SetText(groupName or "Map Drawer") end
-    local subW = W(rootFrame, "drawerPanel.subtitle")
-    if subW and subW.SetText then
-        local noun = count == 1 and "pin" or "pins"
-        subW:SetText(tostring(count) .. " " .. noun)
-    end
-
-    -- Current card: selected-pin detail next to the map.
-    local _, selectedEntry
-    if set then
-        _, selectedEntry = VFN.Selectors.FindEntryInGroup(set, key, CH.Mechanics.GetUI().selectedEntryIndex)
-    end
-    local card = VFN.Selectors.BuildCurrentCardModel(selectedEntry)
-    CH.UI.SetText(W(rootFrame, "drawerPanel.currentCardMap"),    card.map)
-    CH.UI.SetText(W(rootFrame, "drawerPanel.currentCardCoords"), card.coords)
-    CH.UI.SetText(W(rootFrame, "drawerPanel.currentCardNote"),   card.note)
-    CH.UI.SetText(W(rootFrame, "drawerPanel.currentCardSource"), card.source)
+    -- Drawer title / subtitle / current-card text widgets are all bound to
+    -- drawer.* selectors -- BindingEngine pushes their values during the
+    -- pre-controller refresh. The pin painting above is the imperative
+    -- side-effect that bindings can't express.
 
     -- Set-level note (read-only). Edited in the library tab; rendered here
     -- so users have set context while navigating coords. Empty notes show

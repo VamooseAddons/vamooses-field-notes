@@ -475,120 +475,33 @@ function VFN.Store:Flush()
     self.saveTimer = nil
 end
 
+-- Named mutators now funnel through Dispatch -- the reducer's elseif chain
+-- is the single mutation surface. These wrappers exist so call-sites can
+-- read `Store:CreateSet(set)` instead of `Store:Dispatch(ACTIONS.SET_CREATE, set)`,
+-- and so a future caller can ignore the action constant entirely.
 function VFN.Store:CreateSet(set)
-    EnsureStateShape(self.state)
-
-    set = set or {}
-    local libraryID = set.libraryID or self.state.account.defaultLibraryID
-    local library = self.state.account.libraries[libraryID]
-    if not library then
-        libraryID = self.state.account.defaultLibraryID
-        library = self.state.account.libraries[libraryID]
-    end
-
-    local id = set.id or GenerateSetID(self.state, library)
-    if set.id and self.state.account.sets[id] then
-        return { error = "duplicate_id" }
-    end
-
-    if #library.setIDs >= VFN.Constants.MAX_SETS_PER_LIBRARY then
-        return { error = "library_cap" }
-    end
-
-    local copy = DeepCopy(set)
-    copy.id = id
-    copy.libraryID = libraryID
-    copy.title = copy.title or "Untitled Field Note"
-    copy.source = copy.source or { type = "manual" }
-    copy.visibility = copy.visibility or { scope = "account", character = nil }
-    copy.entries = copy.entries or {}
-    copy.items = copy.items or {}
-    copy.createdAt = copy.createdAt or time()
-    copy.updatedAt = time()
-    copy.deletedAt = nil
-
-    self.state.account.sets[id] = copy
-    RemoveFromList(library.setIDs, id)
-    table.insert(library.setIDs, 1, id)
-    library.updatedAt = time()
-
-    self:RebuildIndexes()
-    self:QueueSave()
-    TriggerStateChanged("VFN_SET_CREATE")
-    return { setID = id }
+    return self:Dispatch(VFN.Constants.ACTIONS.SET_CREATE, set or {})
 end
 
 function VFN.Store:DeleteSet(setID)
-    EnsureStateShape(self.state)
-
-    local set = self.state.account.sets[setID]
-    if not set then return false end
-
-    set.deletedAt = time()
-    set.updatedAt = time()
-
-    local libraryID = set.libraryID or self.state.account.defaultLibraryID
-    local library = self.state.account.libraries[libraryID]
-    if library and library.setIDs then
-        RemoveFromList(library.setIDs, setID)
-        library.updatedAt = time()
-    end
-
-    if self.state.account.ui.selectedSetID == setID then
-        self.state.account.ui.selectedSetID = nil
-    end
-
-    self:RebuildIndexes()
-    self:QueueSave()
-    TriggerStateChanged("VFN_SET_DELETE")
-    return true
+    local result = self:Dispatch(VFN.Constants.ACTIONS.SET_DELETE, { setID = setID })
+    return result and result.ok or false
 end
 
 function VFN.Store:OpenSet(setID)
-    EnsureStateShape(self.state)
-
-    local set = self.state.account.sets[setID]
-    if not set or set.deletedAt then return false end
-
-    self.state.account.ui.selectedSetID = setID
-    set.lastOpenedAt = time()
-
-    self:QueueSave()
-    TriggerStateChanged("VFN_SET_OPEN")
-
-    return true
+    local result = self:Dispatch(VFN.Constants.ACTIONS.SET_OPEN, { setID = setID })
+    return result and result.ok or false
 end
 
 function VFN.Store:CloseSet()
-    EnsureStateShape(self.state)
-
-    self.state.account.ui.selectedSetID = nil
-
-    self:QueueSave()
-    TriggerStateChanged("VFN_SET_CLOSE")
-
-    return true
-end
-
-function VFN.Store:GetVisibleSetIDs()
-    EnsureStateShape(self.state)
-
-    local libraryID = self.state.account.defaultLibraryID
-    local library = self.state.account.libraries[libraryID]
-    local source = library and library.setIDs or nil
-    local out = {}
-
-    for _, setID in ipairs(source or {}) do
-        out[#out + 1] = setID
-    end
-
-    return out
+    local result = self:Dispatch(VFN.Constants.ACTIONS.SET_CLOSE)
+    return result and result.ok or false
 end
 
 function VFN.Store:Dispatch(action, payload)
     EnsureStateShape(self.state)
 
-    if action == "VFN_CONFIG_SET" then
+    if action == VFN.Constants.ACTIONS.CONFIG_SET then
         payload = payload or {}
         if payload.key then
             self.state.account.config[payload.key] = payload.value
@@ -596,51 +509,41 @@ function VFN.Store:Dispatch(action, payload)
             self:QueueSave()
             TriggerStateChanged(action)
         end
-    elseif action == "VFN_HARD_RESET" then
+    elseif action == VFN.Constants.ACTIONS.HARD_RESET then
         self.state = NewDefaultState()
         EnsureStateShape(self.state)
         self:QueueSave()
         TriggerStateChanged(action)
-    elseif action == "VFN_UI_SET" then
+    elseif action == VFN.Constants.ACTIONS.UI_SET_PERSISTENT then
+        -- account.ui write (persists across /reload). The caller picked the
+        -- bucket -- no routing table, no key-allowlist lookup. Typos at the
+        -- call site land in account.ui without warning, but they're typos
+        -- in named code rather than typos in dispatch strings.
         payload = payload or {}
-        -- Routing tables: each known UI key lives in EXACTLY ONE bucket.
-        -- account.ui = persisted across /reload (selection, layout prefs)
-        -- session.ui = transient nav state (cleared on /reload)
-        -- A typo'd key hits neither -> warning printed.
-        local PERSISTENT_UI_KEYS = self.PERSISTENT_UI_KEYS or {
-            selectedSetID = true, streamCharacter = true, view = true,
-        }
-        local SESSION_UI_KEYS = self.SESSION_UI_KEYS or {
-            selectedGroupKey = true, selectedEntryIndex = true,
-            sendScope = true, showSourceText = true,
-        }
-        self.PERSISTENT_UI_KEYS = PERSISTENT_UI_KEYS
-        self.SESSION_UI_KEYS    = SESSION_UI_KEYS
         local key = payload.key
         if key == nil then return end
-        if PERSISTENT_UI_KEYS[key] then
-            if self.state.account.ui[key] ~= payload.value then
-                self.state.account.ui[key] = payload.value
-                self:QueueSave()
-                TriggerStateChanged(action)
-            end
-        elseif SESSION_UI_KEYS[key] then
-            if self.state.session.ui[key] ~= payload.value then
-                self.state.session.ui[key] = payload.value
-                -- Session changes do NOT QueueSave -- they're transient.
-                TriggerStateChanged(action)
-            end
-        else
-            local printer = _G and _G.print or function() end
-            printer("|cffff5555[VFN] VFN_UI_SET: unknown key " .. tostring(key) .. "|r")
+        if self.state.account.ui[key] ~= payload.value then
+            self.state.account.ui[key] = payload.value
+            self:QueueSave()
+            TriggerStateChanged(action)
         end
-    elseif action == "VFN_UI_TOGGLE_MAP" then
+    elseif action == VFN.Constants.ACTIONS.UI_SET_TRANSIENT then
+        -- session.ui write (cleared on /reload). No QueueSave -- the whole
+        -- session bucket is rebuilt fresh at addon load.
+        payload = payload or {}
+        local key = payload.key
+        if key == nil then return end
+        if self.state.session.ui[key] ~= payload.value then
+            self.state.session.ui[key] = payload.value
+            TriggerStateChanged(action)
+        end
+    elseif action == VFN.Constants.ACTIONS.UI_TOGGLE_MAP then
         local map = self.state.account.ui.map or {}
         map.shown = (map.shown == false)
         self.state.account.ui.map = map
         self:QueueSave()
         TriggerStateChanged(action)
-    elseif action == "VFN_APPLY_LOG_APPEND" then
+    elseif action == VFN.Constants.ACTIONS.APPLY_LOG_APPEND then
         -- Apply log: bounded ring buffer of recent send / remove events.
         -- Lives in session.applyLog (transient -- fresh history each
         -- session). Drawer-side rendering reads it; Controller_Detail
@@ -658,7 +561,7 @@ function VFN.Store:Dispatch(action, payload)
         end
         self.state.session.applyLog = log
         TriggerStateChanged(action)
-    elseif action == "VFN_VIEWLOCAL_SET" then
+    elseif action == VFN.Constants.ACTIONS.VIEWLOCAL_SET then
         -- Per-view scratch space writes (e.g. library's selectedLibraryID /
         -- selectedSetID). Path is { view, key } -- session.viewLocal[view][key].
         payload = payload or {}
@@ -674,14 +577,19 @@ function VFN.Store:Dispatch(action, payload)
             -- Session writes do NOT persist.
             TriggerStateChanged(action)
         end
-    elseif action == "VFN_LIBRARY_CREATE" then
+    elseif action == VFN.Constants.ACTIONS.LIBRARY_CREATE then
         payload = payload or {}
         local name = type(payload.name) == "string" and payload.name:gsub("^%s+", ""):gsub("%s+$", "") or ""
-        if name == "" then return end
+        if name == "" then return nil end
         local libID = "lib_" .. tostring(time()) .. "_" .. tostring(math.random(1000, 9999))
+        -- seedKey: optional stable identifier for libraries planted by the
+        -- LibrarySeeder. Survives rename, so the seeder can find-and-skip
+        -- by key instead of by display name. Absent on user-created libs.
+        local seedKey = type(payload.seedKey) == "string" and payload.seedKey ~= "" and payload.seedKey or nil
         self.state.account.libraries[libID] = {
             id = libID,
             name = name,
+            seedKey = seedKey,
             visibility = { scope = "account", character = nil },
             setIDs = {},
             createdAt = time(),
@@ -694,7 +602,8 @@ function VFN.Store:Dispatch(action, payload)
         }
         self:QueueSave()
         TriggerStateChanged(action)
-    elseif action == "VFN_LIBRARY_DELETE" then
+        return { libraryID = libID }
+    elseif action == VFN.Constants.ACTIONS.LIBRARY_DELETE then
         payload = payload or {}
         local libID = payload.libraryID
         local lib = libID and self.state.account.libraries[libID] or nil
@@ -712,7 +621,7 @@ function VFN.Store:Dispatch(action, payload)
         self.state.account.libraries[libID] = nil
         self:QueueSave()
         TriggerStateChanged(action)
-    elseif action == "VFN_LIBRARY_RENAME" then
+    elseif action == VFN.Constants.ACTIONS.LIBRARY_RENAME then
         payload = payload or {}
         local lib = payload.libraryID and self.state.account.libraries[payload.libraryID] or nil
         local name = type(payload.name) == "string" and payload.name:gsub("^%s+", ""):gsub("%s+$", "") or ""
@@ -721,7 +630,84 @@ function VFN.Store:Dispatch(action, payload)
         lib.updatedAt = time()
         self:QueueSave()
         TriggerStateChanged(action)
-    elseif action == "VFN_SET_UPDATE" then
+    elseif action == VFN.Constants.ACTIONS.SET_CREATE then
+        -- Reducer body for Store:CreateSet (which dispatches to this case).
+        -- Returns { setID = id } on success, { error = "..." } on rejection.
+        local set = payload or {}
+        local libraryID = set.libraryID or self.state.account.defaultLibraryID
+        local library = self.state.account.libraries[libraryID]
+        if not library then
+            libraryID = self.state.account.defaultLibraryID
+            library = self.state.account.libraries[libraryID]
+        end
+
+        local id = set.id or GenerateSetID(self.state, library)
+        if set.id and self.state.account.sets[id] then
+            return { error = "duplicate_id" }
+        end
+        if #library.setIDs >= VFN.Constants.MAX_SETS_PER_LIBRARY then
+            return { error = "library_cap" }
+        end
+
+        local copy = DeepCopy(set)
+        copy.id = id
+        copy.libraryID = libraryID
+        copy.title      = copy.title      or "Untitled Field Note"
+        copy.source     = copy.source     or { type = "manual" }
+        copy.visibility = copy.visibility or { scope = "account", character = nil }
+        copy.entries    = copy.entries    or {}
+        copy.items      = copy.items      or {}
+        copy.createdAt  = copy.createdAt  or time()
+        copy.updatedAt  = time()
+        copy.deletedAt  = nil
+
+        self.state.account.sets[id] = copy
+        RemoveFromList(library.setIDs, id)
+        table.insert(library.setIDs, 1, id)
+        library.updatedAt = time()
+
+        self:RebuildIndexes()
+        self:QueueSave()
+        TriggerStateChanged(action)
+        return { setID = id }
+    elseif action == VFN.Constants.ACTIONS.SET_DELETE then
+        local setID = payload and payload.setID
+        local set = setID and self.state.account.sets[setID] or nil
+        if not set then return { ok = false } end
+
+        set.deletedAt = time()
+        set.updatedAt = time()
+
+        local libraryID = set.libraryID or self.state.account.defaultLibraryID
+        local library = self.state.account.libraries[libraryID]
+        if library and library.setIDs then
+            RemoveFromList(library.setIDs, setID)
+            library.updatedAt = time()
+        end
+        if self.state.account.ui.selectedSetID == setID then
+            self.state.account.ui.selectedSetID = nil
+        end
+
+        self:RebuildIndexes()
+        self:QueueSave()
+        TriggerStateChanged(action)
+        return { ok = true }
+    elseif action == VFN.Constants.ACTIONS.SET_OPEN then
+        local setID = payload and payload.setID
+        local set = setID and self.state.account.sets[setID] or nil
+        if not set or set.deletedAt then return { ok = false } end
+
+        self.state.account.ui.selectedSetID = setID
+        set.lastOpenedAt = time()
+        self:QueueSave()
+        TriggerStateChanged(action)
+        return { ok = true }
+    elseif action == VFN.Constants.ACTIONS.SET_CLOSE then
+        self.state.account.ui.selectedSetID = nil
+        self:QueueSave()
+        TriggerStateChanged(action)
+        return { ok = true }
+    elseif action == VFN.Constants.ACTIONS.SET_UPDATE then
         -- Replace a set's editable triple (title / sourceText / note) AND
         -- the derived sourceLines + entries (post re-parse). The triple
         -- ALWAYS arrives as a complete object at payload.fields -- partial
@@ -742,7 +728,7 @@ function VFN.Store:Dispatch(action, payload)
         self:RebuildIndexes()  -- entries changed -> map/dedup indexes too
         self:QueueSave()
         TriggerStateChanged(action)
-    elseif action == "VFN_SET_MOVE_LIBRARY" then
+    elseif action == VFN.Constants.ACTIONS.SET_MOVE_LIBRARY then
         payload = payload or {}
         local setID = payload.setID
         local toID  = payload.toLibraryID

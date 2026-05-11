@@ -88,15 +88,26 @@ function Mech.Dispatch(action, payload)
     end
 end
 
-function Mech.DispatchUI(key, value)
+-- UI state has two buckets:
+--   account.ui  -- persists across /reload (selection, layout prefs)
+--   session.ui  -- cleared on /reload (transient nav state)
+-- Pick the right helper at the call site -- the bucket choice is now part
+-- of the action's name, not an external routing table.
+function Mech.SetUIPersistent(key, value)
     if VFN.Store and VFN.Store.Dispatch then
-        VFN.Store:Dispatch("VFN_UI_SET", { key = key, value = value })
+        VFN.Store:Dispatch(VFN.Constants.ACTIONS.UI_SET_PERSISTENT, { key = key, value = value })
+    end
+end
+
+function Mech.SetUITransient(key, value)
+    if VFN.Store and VFN.Store.Dispatch then
+        VFN.Store:Dispatch(VFN.Constants.ACTIONS.UI_SET_TRANSIENT, { key = key, value = value })
     end
 end
 
 function Mech.DispatchViewLocal(view, key, value)
     if VFN.Store and VFN.Store.Dispatch then
-        VFN.Store:Dispatch("VFN_VIEWLOCAL_SET", { view = view, key = key, value = value })
+        VFN.Store:Dispatch(VFN.Constants.ACTIONS.VIEWLOCAL_SET, { view = view, key = key, value = value })
     end
 end
 
@@ -131,18 +142,20 @@ function Mech.CycleConfigValue(key, order, fallback)
     end
     if nextIndex > #order then nextIndex = 1 end
     local nextValue = order[nextIndex]
-    Mech.Dispatch("VFN_CONFIG_SET", { key = key, value = nextValue })
+    Mech.Dispatch(VFN.Constants.ACTIONS.CONFIG_SET, { key = key, value = nextValue })
     return nextValue
 end
 
--- Same shape but for UI-state keys (sendScope etc).
+-- Same shape but for transient UI keys (sendScope etc). Reads from session.ui
+-- and writes via SetUITransient. If a future cycle needs a persistent UI
+-- key, add a CycleUIPersistent twin -- explicit beats clever.
 function Mech.CycleUIValue(key, order)
-    local ui = Mech.GetUI()
+    local ui = (VFN.Store and VFN.Store:GetState().session.ui) or {}
     local current = ui[key]
     local nextIndex = 1
     for index, value in ipairs(order) do
         if value == current then nextIndex = index + 1; break end
     end
     if nextIndex > #order then nextIndex = 1 end
-    Mech.DispatchUI(key, order[nextIndex])
+    Mech.SetUITransient(key, order[nextIndex])
 end

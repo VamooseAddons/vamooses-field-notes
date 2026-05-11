@@ -832,6 +832,34 @@ function Layout:Validate(config)
         end
     end
 
+    -- Resolve which container each child sits in (panel.body / panel.<slot> /
+    -- section). For stacked containers (vertical/horizontal layout) we'll
+    -- require every child to declare an explicit `order` -- absent `order`
+    -- defaults to 0 and sorts ABOVE explicitly-ordered siblings, which has
+    -- bitten us once (the indexHeader-at-bottom regression in May 2026).
+    local function isStackedContainer(parentId, slot)
+        if not parentId then return false end
+        local panelSpec = config.panels and config.panels[parentId]
+        if panelSpec then
+            local slots = panelSpec.slots or {}
+            local slotSpec = slot and slots[slot]
+            if slotSpec then
+                local layout = slotSpec.layout
+                    or ((slot == "header" or slot == "footer") and "horizontal")
+                    or "vertical"
+                return layout == "vertical" or layout == "horizontal"
+            end
+            local bodyLayout = panelSpec.bodyLayout or "vertical"
+            return bodyLayout == "vertical" or bodyLayout == "horizontal"
+        end
+        local sectionSpec = config.sections and config.sections[parentId]
+        if sectionSpec then
+            local l = sectionSpec.layout or "vertical"
+            return l == "vertical" or l == "horizontal"
+        end
+        return false
+    end
+
     -- Validate panels.
     for id, spec in pairs(config.panels or {}) do
         if spec.kind and Registry and Registry.Get and not Registry:Get(spec.kind) then
@@ -860,6 +888,11 @@ function Layout:Validate(config)
             elseif containerIds[parent] == "section" then
                 err(("section %q: slot %q is ignored because parent %q is a section, not a panel"):format(id, spec.slot, parent))
             end
+        end
+        -- Explicit `order` on stacked-container children. See isStackedContainer
+        -- above for the rationale -- silent default-to-0 is the bug class.
+        if parent and isStackedContainer(parent, spec.slot) and spec.order == nil then
+            err(("section %q: `in` = %q is a stacked container; `order` is required"):format(id, tostring(parent)))
         end
     end
 
@@ -894,6 +927,9 @@ function Layout:Validate(config)
         -- silent). Validation forces explicit declaration.
         if spec.kind and TEXT_BEARING_KINDS[spec.kind] and not spec.font then
             err(("widget %q: kind %q is text-bearing and requires a `font` role"):format(id, spec.kind))
+        end
+        if parent and isStackedContainer(parent, spec.slot) and spec.order == nil then
+            err(("widget %q: `in` = %q is a stacked container; `order` is required"):format(id, tostring(parent)))
         end
 
         -- Scrollboxes that reference a rowKind must resolve to a registered

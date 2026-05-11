@@ -39,14 +39,14 @@ local function ShowLibraryMenu(libraryID, ownerFrame)
         disabled = protected,
         callback = function()
             CH.UI.Confirm({
-                id       = "VFN_LIBRARY_RENAME",
+                id       = VFN.Constants.ACTIONS.LIBRARY_RENAME,
                 text     = "Rename library %q:",
                 textArg1 = lib.name or "library",
                 accept   = "Rename",
                 input    = true,
                 data     = libraryID,
                 onAccept = function(name, data)
-                    CH.Mechanics.Dispatch("VFN_LIBRARY_RENAME", { libraryID = data, name = name })
+                    CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.LIBRARY_RENAME, { libraryID = data, name = name })
                 end,
             })
         end,
@@ -56,13 +56,13 @@ local function ShowLibraryMenu(libraryID, ownerFrame)
         disabled = protected,
         callback = function()
             CH.UI.Confirm({
-                id       = "VFN_LIBRARY_DELETE",
+                id       = VFN.Constants.ACTIONS.LIBRARY_DELETE,
                 text     = "Delete library %q?\n\nField notes inside will move to the Default library.",
                 textArg1 = lib.name or "library",
                 accept   = "Delete",
                 data     = libraryID,
                 onAccept = function(_, data)
-                    CH.Mechanics.Dispatch("VFN_LIBRARY_DELETE", { libraryID = data })
+                    CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.LIBRARY_DELETE, { libraryID = data })
                 end,
             })
         end,
@@ -102,7 +102,7 @@ local function ShowMoveMenu(setID, ownerFrame)
         items[#items + 1] = {
             text = lib.name .. (lib.isDefault and "  (Default)" or ""),
             callback = function()
-                CH.Mechanics.Dispatch("VFN_SET_MOVE_LIBRARY", { setID = setID, toLibraryID = libID })
+                CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.SET_MOVE_LIBRARY, { setID = setID, toLibraryID = libID })
             end,
         }
     end
@@ -111,14 +111,28 @@ end
 
 -- ===== Discard-edits guard ===================================================
 
+-- Edit-box dirty state lives in viewLocal.library, NOT on the controller --
+-- pure-data so the title/note binding selectors can read it without
+-- inspecting widgets. Helpers wrap the dispatch + read calls so the
+-- routing change is local if we ever rename the state path.
+local function editsDirty()
+    local libUI = CH.Mechanics.GetViewLocal("library")
+    return libUI.editsDirty == true
+end
+
+local function clearEditsDirty()
+    CH.Mechanics.DispatchViewLocal("library", "editsDirty", false)
+    CH.Mechanics.DispatchViewLocal("library", "editingTitle", nil)
+    CH.Mechanics.DispatchViewLocal("library", "editingNote", nil)
+end
+
 -- Wrap a selection-changing dispatch so we prompt before clobbering unsaved
 -- typing in the right-column edit boxes. wouldDiscard is the caller's check
 -- for whether the action would actually move selection (no point prompting
 -- when clicking the already-selected row). On accept we clear the dirty
--- flag here so PopulateEditBoxes won't be skipped by the dirty branch in
--- Refresh.
+-- flag here so the title/note bindings re-resolve to the persisted values.
 local function withDirtyGuard(wouldDiscard, doAction)
-    if not (wouldDiscard and LibraryController._editsDirty) then
+    if not (wouldDiscard and editsDirty()) then
         doAction()
         return
     end
@@ -127,7 +141,7 @@ local function withDirtyGuard(wouldDiscard, doAction)
         text     = "Discard unsaved edits to the current card?",
         accept   = "Discard",
         onAccept = function()
-            LibraryController._editsDirty = false
+            clearEditsDirty()
             doAction()
         end,
     })
@@ -348,50 +362,9 @@ VFN.Rows:Register("libraryCoordPreviewRow", {
 -- ===== Editable triple (title + note) =======================================
 --
 -- Title + note live on `set` at canonical paths (set.title, set.payload.note).
--- sourceText is still on the set but the right column no longer exposes an
--- editor for it -- the coord-preview list shows the parsed entries, and the
--- Copy button copies the original sourceText to the clipboard.
-
-local function GetEditableFields(state, setID)
-    local fields = { title = "", note = "" }
-    if not (state and setID) then return fields end
-    local set = state.account.sets and state.account.sets[setID]
-    if not set then return fields end
-    fields.title = (type(set.title) == "string" and set.title) or ""
-    local payload = set.payload or {}
-    fields.note  = (type(payload.note) == "string" and payload.note) or ""
-    return fields
-end
-
-local function SetEditBoxText(rootFrame, widgetID, text)
-    local box = W(rootFrame, widgetID)
-    if not (box and box.SetText) then return end
-    box:SetText(text or "")
-    -- Force the placeholder fontstring to re-evaluate visibility. OnTextChanged
-    -- *should* fire on programmatic SetText, but on 12.0.5 we've seen the
-    -- placeholder ("Untitled Field Note") linger over real content when the
-    -- editbox is populated outside a user-input cycle. Belt + suspenders.
-    if box._vfnPlaceholderRefresh then box._vfnPlaceholderRefresh() end
-end
-
-local function GetEditBoxText(rootFrame, widgetID)
-    local box = W(rootFrame, widgetID)
-    return (box and box.GetText and box:GetText()) or ""
-end
-
-local function PopulateEditBoxes(rootFrame, fields)
-    SetEditBoxText(rootFrame, "libraryPanel.titleBox", "")
-    SetEditBoxText(rootFrame, "libraryPanel.noteBox",  "")
-    SetEditBoxText(rootFrame, "libraryPanel.titleBox", fields.title)
-    SetEditBoxText(rootFrame, "libraryPanel.noteBox",  fields.note)
-end
-
-local function ReadEditBoxes(rootFrame)
-    return {
-        title = GetEditBoxText(rootFrame, "libraryPanel.titleBox"),
-        note  = GetEditBoxText(rootFrame, "libraryPanel.noteBox"),
-    }
-end
+-- The Curator's title/note widgets are bound to library.titleEditValue /
+-- library.noteEditValue selectors, which return the staged viewLocal value
+-- while editsDirty is true and the persisted set value otherwise.
 
 local function SetActionStatus(rootFrame, text)
     SetText(W(rootFrame, "libraryPanel.coordsActionStatus"), text or "")
@@ -406,34 +379,35 @@ local function SaveEdits(rootFrame)
     end
     local state = CH.Mechanics.GetState()
     local set = state and state.account.sets and state.account.sets[setID]
-    local fields = ReadEditBoxes(rootFrame)
+    -- Pull title/note from the viewLocal staging slots (not from the widget)
+    -- so the source of truth is consistent with what the title/note bindings
+    -- already read.
+    local titleText = libUI.editingTitle
+    local noteText  = libUI.editingNote
+    if titleText == nil then titleText = (set and set.title) or "" end
+    if noteText  == nil then noteText  = (set and set.payload and set.payload.note) or "" end
     -- Preserve sourceText (no longer editable here -- reducer's complete-triple
     -- contract clobbers it to "" when absent from the payload). Omit
     -- sourceLines/entries so the reducer keeps the existing parsed entries.
-    CH.Mechanics.Dispatch("VFN_SET_UPDATE", {
+    CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.SET_UPDATE, {
         setID  = setID,
         fields = {
-            title      = fields.title,
-            note       = fields.note,
+            title      = titleText,
+            note       = noteText,
             sourceText = (set and type(set.sourceText) == "string") and set.sourceText or "",
         },
     })
-    LibraryController._editsDirty = false
+    clearEditsDirty()
     SetActionStatus(rootFrame, "Saved.")
 end
 
 local function RestoreEdits(rootFrame)
-    local libUI = CH.Mechanics.GetViewLocal("library")
-    local setID = libUI.selectedSetID
-    local state = CH.Mechanics.GetState()
-    PopulateEditBoxes(rootFrame, GetEditableFields(state, setID))
-    LibraryController._editsDirty = false
+    clearEditsDirty()
     SetActionStatus(rootFrame, "Reverted to saved values.")
 end
 
 -- ===== Find-state helpers ===================================================
 
-local SORT_LABELS = { recent = "Recent", alpha = "A - Z", size = "Largest" }
 local SORT_CYCLE  = { recent = "alpha",  alpha  = "size", size = "recent" }
 local FILTERS     = { "all", "ready", "has_note", "blocked" }
 
@@ -452,17 +426,25 @@ function LibraryController:Wire(rootFrame)
     CH.UI.OnClick(rootFrame, "libraryPanel.coordsSaveButton",    function() SaveEdits(rootFrame) end)
     CH.UI.OnClick(rootFrame, "libraryPanel.coordsRestoreButton", function() RestoreEdits(rootFrame) end)
 
-    -- Either editbox typing into marks the pair dirty so Refresh stops
-    -- repopulating from the Store until Save / Restore.
-    local function markDirty(_, userInput)
-        if userInput then
-            LibraryController._editsDirty = true
+    -- Editbox OnTextChanged: stage the current text into viewLocal's editing
+    -- slots and flip the dirty flag. The title/note bindings see editsDirty
+    -- and return the staged value, leaving in-progress typing intact. Save
+    -- commits the staged value via SET_UPDATE; Restore just clears the flag.
+    local function makeStager(field)
+        return function(box, userInput)
+            if not userInput then return end
+            CH.Mechanics.DispatchViewLocal("library", field, box:GetText() or "")
+            CH.Mechanics.DispatchViewLocal("library", "editsDirty", true)
             SetActionStatus(rootFrame, "Unsaved edits -- click Save or Restore.")
         end
     end
-    for _, id in ipairs({ "libraryPanel.titleBox", "libraryPanel.noteBox" }) do
-        local box = W(rootFrame, id)
-        if box and box.SetScript then box:SetScript("OnTextChanged", markDirty) end
+    local titleBox = W(rootFrame, "libraryPanel.titleBox")
+    if titleBox and titleBox.SetScript then
+        titleBox:SetScript("OnTextChanged", makeStager("editingTitle"))
+    end
+    local noteBox = W(rootFrame, "libraryPanel.noteBox")
+    if noteBox and noteBox.SetScript then
+        noteBox:SetScript("OnTextChanged", makeStager("editingNote"))
     end
 
     -- Search box: every keystroke writes searchQuery, which triggers a Refresh
@@ -567,12 +549,12 @@ function LibraryController:Wire(rootFrame)
     -- ShowLibraryMenu.)
     CH.UI.OnClick(rootFrame, "libraryPanel.newLibraryButton", function()
         CH.UI.Confirm({
-            id      = "VFN_LIBRARY_CREATE",
+            id      = VFN.Constants.ACTIONS.LIBRARY_CREATE,
             text    = "Name the new library:",
             accept  = "Create",
             input   = true,
             onAccept = function(name)
-                CH.Mechanics.Dispatch("VFN_LIBRARY_CREATE", { name = name })
+                CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.LIBRARY_CREATE, { name = name })
             end,
         })
     end)
@@ -593,132 +575,33 @@ local function PaintFilterChips(rootFrame, activeFilter)
     end
 end
 
-local function UpdateStatCards(rootFrame, set)
-    local statCoords = W(rootFrame, "libraryPanel.statCoords")
-    local statMaps   = W(rootFrame, "libraryPanel.statMaps")
-    local statStatus = W(rootFrame, "libraryPanel.statStatus")
-
-    if not set then
-        if statCoords and statCoords.SetValue then statCoords:SetValue("0") end
-        if statMaps   and statMaps.SetValue   then statMaps:SetValue("-")   end
-        if statStatus and statStatus.SetValue then statStatus:SetValue("-") end
-        return
-    end
-
-    local entries = set.entries or {}
-    local n = #entries
-    local seen, m = {}, 0
-    for _, e in ipairs(entries) do
-        local k = e.coordMapID or e.mapName
-        if k and not seen[k] then seen[k] = true; m = m + 1 end
-    end
-    local hasResolved = false
-    for _, e in ipairs(entries) do
-        if e.coordMapID then hasResolved = true; break end
-    end
-    local statusText = hasResolved and "Ready" or (n == 0 and "Empty" or "Blocked")
-
-    if statCoords and statCoords.SetValue then statCoords:SetValue(tostring(n)) end
-    if statMaps   and statMaps.SetValue   then statMaps:SetValue(m > 0 and tostring(m) or "-") end
-    if statStatus and statStatus.SetValue then statStatus:SetValue(statusText) end
-end
-
+-- Refresh is now imperative-only -- all widget value pushes (scrollbox
+-- items, label text, stat cards, button enabled, edit-box text) flow
+-- through the BindingEngine via the widget specs' `binding` field. What
+-- remains here is the two pieces of imperative state that can't (yet) be
+-- expressed as a pure-data binding:
+--
+--   1. selectedLibraryID fallback -- if the user's pick is stale, write the
+--      defaultLibraryID into viewLocal. Bindings are read-only so they
+--      can't make this self-healing write.
+--   2. Filter-chip variant paint -- the filter widgets are kind="button",
+--      and Button factory doesn't expose SetVariant. The binding fires but
+--      the button's dispatcher silently ignores the variant field. Until
+--      these widgets get migrated to kind="chip" (or Button grows a
+--      variant method), PaintFilterChips stays imperative.
 function LibraryController:Refresh(rootFrame, ctx)
     local state = (ctx and ctx.state) or CH.Mechanics.GetState()
     if not state then return end
 
     local libUI = CH.Mechanics.GetViewLocal("library")
     local libs = state.account.libraries or {}
-    local selectedLibID = libUI.selectedLibraryID
-    if not (selectedLibID and libs[selectedLibID]) then
-        selectedLibID = state.account.defaultLibraryID
-        CH.Mechanics.DispatchViewLocal("library", "selectedLibraryID", selectedLibID)
+    if not (libUI.selectedLibraryID and libs[libUI.selectedLibraryID]) then
+        CH.Mechanics.DispatchViewLocal("library", "selectedLibraryID", state.account.defaultLibraryID)
     end
 
-    local indexItems = VFN.Selectors.BuildLibraryIndexItems(state)
-    local indexList  = W(rootFrame, "libraryPanel.indexList")
-    if indexList and indexList.SetItems then indexList:SetItems(indexItems, true) end
-
-    local find = GetFindState()
-    local cardItems = VFN.Selectors.BuildLibraryCardItems(state, selectedLibID, find)
-    local cardList  = W(rootFrame, "libraryPanel.cardsList")
-    if cardList and cardList.SetItems then cardList:SetItems(cardItems, true) end
-
-    -- Subtitle under the "Finder" column header: "<libname>  -  <visible>/<total>".
-    local totalInLib = 0
-    local activeLib = libs[selectedLibID]
-    if activeLib and activeLib.setIDs then totalInLib = #activeLib.setIDs end
-    SetText(W(rootFrame, "libraryPanel.cardsHeader"),
-        string.format("%s  -  %d/%d",
-            (activeLib and activeLib.name) or "Library",
-            #cardItems, totalInLib))
-
-    local selectedSetID = libUI.selectedSetID
-    local selectedSet = selectedSetID and state.account.sets[selectedSetID]
-
-    -- Edit boxes: repopulate only when the selected card changed OR after
-    -- Save/Restore (which clear _editsDirty). Keeps in-progress typing safe.
-    local fields = GetEditableFields(state, selectedSetID)
-    if selectedSetID ~= LibraryController._lastRenderedSetID then
-        PopulateEditBoxes(rootFrame, fields)
-        LibraryController._lastRenderedSetID = selectedSetID
-        LibraryController._editsDirty = false
-        SetActionStatus(rootFrame, "")
-    elseif not LibraryController._editsDirty and selectedSet then
-        local cur = ReadEditBoxes(rootFrame)
-        if cur.title ~= fields.title then SetEditBoxText(rootFrame, "libraryPanel.titleBox", fields.title) end
-        if cur.note  ~= fields.note  then SetEditBoxText(rootFrame, "libraryPanel.noteBox",  fields.note)  end
-    end
-
-    -- Coord-preview list (right column). Same selector the Detail view uses,
-    -- same row shape (ed.coords + ed.label + ed.entry).
-    local previewItems = VFN.Selectors.BuildCoordinateItems(selectedSet)
-    local previewList  = W(rootFrame, "libraryPanel.coordsPreviewList")
-    if previewList and previewList.SetItems then previewList:SetItems(previewItems, true) end
-
-    -- Stat row.
-    UpdateStatCards(rootFrame, selectedSet)
-
-    -- Sort button label cycles through SORT_LABELS.
-    CH.UI.SetButtonText(W(rootFrame, "libraryPanel.sortButton"), SORT_LABELS[find.sort] or "Recent")
-
-    -- Filter chip highlights.
-    PaintFilterChips(rootFrame, find.filter)
-
-    -- Subtitle: total sets + lib count.
-    local totalSets = 0
-    for _, lib in pairs(libs) do
-        for _, _ in ipairs(lib.setIDs or {}) do totalSets = totalSets + 1 end
-    end
-    SetText(W(rootFrame, "libraryPanel.subtitle"), string.format(
-        "%d field notes across %d %s. Right-click a card to move libraries.",
-        totalSets, #indexItems, #indexItems == 1 and "library" or "libraries"))
-
-    -- Header label on the right column shows the coord-preview count.
-    SetText(W(rootFrame, "libraryPanel.previewHeader"),
-        selectedSet and string.format("Coordinates (%d)", #previewItems) or "Coordinates")
-
-    -- Enable/disable buttons based on selection state.
-    local saveBtn      = W(rootFrame, "libraryPanel.coordsSaveButton")
-    local restoreBtn   = W(rootFrame, "libraryPanel.coordsRestoreButton")
-    local sendBtn      = W(rootFrame, "libraryPanel.sendWaypointsButton")
-    local moveBtn      = W(rootFrame, "libraryPanel.moveToButton")
-    local deleteCardBtn= W(rootFrame, "libraryPanel.deleteCardButton")
-    local copyBtn      = W(rootFrame, "libraryPanel.previewCopyButton")
-
-    local hasSel = selectedSet ~= nil
-    local hasReady = false
-    if selectedSet then
-        for _, e in ipairs(selectedSet.entries or {}) do
-            if e.coordMapID then hasReady = true; break end
-        end
-    end
-    if saveBtn       and saveBtn.SetEnabled       then saveBtn:SetEnabled(hasSel)           end
-    if restoreBtn    and restoreBtn.SetEnabled    then restoreBtn:SetEnabled(hasSel)        end
-    if sendBtn       and sendBtn.SetEnabled       then sendBtn:SetEnabled(hasReady)         end
-    if moveBtn       and moveBtn.SetEnabled       then moveBtn:SetEnabled(hasSel)           end
-    if deleteCardBtn and deleteCardBtn.SetEnabled then deleteCardBtn:SetEnabled(hasSel)     end
-    if copyBtn       and copyBtn.SetEnabled       then copyBtn:SetEnabled(hasReady)         end
+    -- Filter-chip variants. Once the filter widgets become kind="chip", this
+    -- whole block deletes -- the bindings on each chip already exist.
+    PaintFilterChips(rootFrame, GetFindState().filter)
 end
 
 VFN.Controllers:Register("library", LibraryController)

@@ -102,6 +102,11 @@ function VFN:BuildMainWindow(parent)
     -- 3. Controllers wire behaviour to spec'd widgets.
     if VFN.Controllers and VFN.Controllers.WireAll then VFN.Controllers:WireAll(parent) end
 
+    -- 4. Tag bound widgets so the binding engine can push values during Refresh.
+    if VFN.BindingEngine and VFN.BindingEngine.Build then
+        VFN.BindingEngine:Build(parent, VFN.LayoutConfig)
+    end
+
     self:RefreshMainWindow()
 end
 
@@ -223,6 +228,13 @@ function VFN:RefreshMainWindow()
         -- selectedGroupKey lives in session.ui (transient nav), not account.ui.
         groupKey = state and state.session and state.session.ui and state.session.ui.selectedGroupKey or nil,
     }
+    -- Binding engine pushes state -> bound widgets BEFORE controllers refresh.
+    -- Controllers' Refresh handles only imperative side-effect work (canvas
+    -- pin painting, dirty editbox guarding, etc.) that can't be expressed as
+    -- a pure-data binding.
+    if VFN.BindingEngine and VFN.BindingEngine.Apply then
+        VFN.BindingEngine:Apply(frame, state, ctx)
+    end
     if VFN.Controllers and VFN.Controllers.RefreshAll then
         VFN.Controllers:RefreshAll(frame, ctx)
     end

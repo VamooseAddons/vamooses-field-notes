@@ -12,6 +12,29 @@ VFN.Selectors = VFN.Selectors or {}
 
 local Selectors = VFN.Selectors
 
+-- ===== Selector registry (for the binding engine) ==========================
+-- Bindings reference selectors by name (e.g. "library.cardItems"). Each
+-- registered selector takes (state, ctx) and returns the value the widget
+-- should display. Legacy Selectors.BuildXItems(...) functions still exist;
+-- registered names wrap them and extract args from state/ctx.
+Selectors._registry = Selectors._registry or {}
+
+function Selectors:Register(name, fn)
+    self._registry[name] = fn
+end
+
+function Selectors:Get(name)
+    return self._registry[name]
+end
+
+function Selectors:Call(name, state, ctx)
+    local fn = self._registry[name]
+    if not fn then
+        error("selector not registered: " .. tostring(name), 2)
+    end
+    return fn(state, ctx)
+end
+
 -- Group identity ------------------------------------------------------------
 
 -- Module-level cache so we resolve C_Map.GetMapInfo once per map ID per
@@ -498,12 +521,7 @@ function Selectors.BuildStreamItems(state, currentCharacter)
     local activeLibraryID = (streamLib and libraries[streamLib] and not libraries[streamLib].deletedAt)
         and streamLib or state.account.defaultLibraryID
 
-    local visibleIDs
-    if activeLibraryID and libraries[activeLibraryID] then
-        visibleIDs = libraries[activeLibraryID].setIDs or {}
-    else
-        visibleIDs = (VFN.Store and VFN.Store.GetVisibleSetIDs and VFN.Store:GetVisibleSetIDs()) or {}
-    end
+    local visibleIDs = (activeLibraryID and libraries[activeLibraryID] and libraries[activeLibraryID].setIDs) or {}
     for _, setID in ipairs(visibleIDs) do
         local set = sets[setID]
         if set and not set.deletedAt
@@ -529,3 +547,372 @@ function Selectors.BuildStreamItems(state, currentCharacter)
     end
     return items
 end
+
+
+-- ===========================================================================
+-- Registered selectors (for the binding engine).
+-- Each takes (state, ctx) and returns the value to push to a widget. Most
+-- wrap the legacy Selectors.BuildXItems(...) helpers above; the wrappers
+-- exist so bindings reference one stable name and the legacy signatures
+-- can keep their per-arg shapes.
+-- ===========================================================================
+
+local function libUI(state)
+    return (state and state.session and state.session.viewLocal and state.session.viewLocal.library) or {}
+end
+
+local function activeLibrary(state)
+    local lib = libUI(state)
+    local libs = state.account.libraries or {}
+    local id = lib.selectedLibraryID
+    if id and libs[id] and not libs[id].deletedAt then return id, libs[id] end
+    id = state.account.defaultLibraryID
+    return id, libs[id]
+end
+
+local function selectedSet(state)
+    local lib = libUI(state)
+    local id = lib.selectedSetID
+    return id and state.account.sets and state.account.sets[id] or nil
+end
+
+local SORT_LABELS = { recent = "Recent", alpha = "A - Z", size = "Largest" }
+local FILTER_KEYS = { "all", "ready", "has_note", "blocked" }
+
+-- --- Library tab: index column -------------------------------------------
+Selectors:Register("library.indexItems", function(state)
+    return Selectors.BuildLibraryIndexItems(state)
+end)
+
+-- --- Library tab: finder column ------------------------------------------
+Selectors:Register("library.cardItems", function(state)
+    local id = activeLibrary(state)
+    local lib = libUI(state)
+    return Selectors.BuildLibraryCardItems(state, id, {
+        query = lib.searchQuery, filter = lib.activeFilter, sort = lib.sortOrder,
+    })
+end)
+
+Selectors:Register("library.cardsHeaderText", function(state)
+    local id, lib = activeLibrary(state)
+    local items = Selectors:Call("library.cardItems", state)
+    local total = (lib and lib.setIDs and #lib.setIDs) or 0
+    return string.format("%s  -  %d/%d", (lib and lib.name) or "Library", #items, total)
+end)
+
+Selectors:Register("library.subtitleText", function(state)
+    local libs = state.account.libraries or {}
+    local totalSets, totalLibs = 0, 0
+    for _, lib in pairs(libs) do
+        if not lib.deletedAt then
+            totalLibs = totalLibs + 1
+            for _, _ in ipairs(lib.setIDs or {}) do totalSets = totalSets + 1 end
+        end
+    end
+    return string.format("%d field notes across %d %s. Right-click a card to move libraries.",
+        totalSets, totalLibs, totalLibs == 1 and "library" or "libraries")
+end)
+
+Selectors:Register("library.sortLabel", function(state)
+    return SORT_LABELS[libUI(state).sortOrder] or "Recent"
+end)
+
+-- --- Library tab: curator column ----------------------------------------
+Selectors:Register("library.previewItems", function(state)
+    return Selectors.BuildCoordinateItems(selectedSet(state))
+end)
+
+Selectors:Register("library.previewHeaderText", function(state)
+    local set = selectedSet(state)
+    if not set then return "Coordinates" end
+    local items = Selectors.BuildCoordinateItems(set)
+    return string.format("Coordinates (%d)", #items)
+end)
+
+Selectors:Register("library.statCoordsValue", function(state)
+    local set = selectedSet(state)
+    local n = (set and set.entries and #set.entries) or 0
+    return tostring(n)
+end)
+
+Selectors:Register("library.statMapsValue", function(state)
+    local set = selectedSet(state)
+    if not set then return "-" end
+    local seen, n = {}, 0
+    for _, e in ipairs(set.entries or {}) do
+        local k = e.coordMapID or e.mapName
+        if k and not seen[k] then seen[k] = true; n = n + 1 end
+    end
+    return n > 0 and tostring(n) or "-"
+end)
+
+Selectors:Register("library.statStatusValue", function(state)
+    local set = selectedSet(state)
+    if not set then return "-" end
+    local entries = set.entries or {}
+    if #entries == 0 then return "Empty" end
+    for _, e in ipairs(entries) do
+        if e.coordMapID then return "Ready" end
+    end
+    return "Blocked"
+end)
+
+-- --- Library tab: edit boxes (dirty-aware) ------------------------------
+-- The session staging fields (editingTitle/Note + editsDirty) are set by
+-- OnTextChanged in Controller_Library. While dirty, the selectors return
+-- the staged value; while clean, they return the persisted set.title/note.
+Selectors:Register("library.titleEditValue", function(state)
+    local lib = libUI(state)
+    if lib.editsDirty then return lib.editingTitle or "" end
+    local set = selectedSet(state)
+    return (set and set.title) or ""
+end)
+
+Selectors:Register("library.noteEditValue", function(state)
+    local lib = libUI(state)
+    if lib.editsDirty then return lib.editingNote or "" end
+    local set = selectedSet(state)
+    local payload = set and set.payload or {}
+    return (type(payload.note) == "string" and payload.note) or ""
+end)
+
+-- --- Library tab: button enabled states ---------------------------------
+local function hasSelectedSet(state)
+    return selectedSet(state) ~= nil
+end
+
+local function hasReadyEntries(state)
+    local set = selectedSet(state)
+    if not set then return false end
+    for _, e in ipairs(set.entries or {}) do
+        if e.coordMapID then return true end
+    end
+    return false
+end
+
+Selectors:Register("library.saveEnabled",        hasSelectedSet)
+Selectors:Register("library.restoreEnabled",     hasSelectedSet)
+Selectors:Register("library.moveCardEnabled",    hasSelectedSet)
+Selectors:Register("library.deleteCardEnabled",  hasSelectedSet)
+Selectors:Register("library.sendCardEnabled",    hasReadyEntries)
+Selectors:Register("library.copyCoordsEnabled",  hasReadyEntries)
+
+-- --- Library tab: filter chip variants (active vs tertiary) -------------
+-- These are wired even though kind="button" widgets don't currently expose
+-- SetVariant -- the dispatcher's "variant" field is a no-op on button. When
+-- the filter widgets get migrated to kind="chip" they'll start painting
+-- automatically.
+local function filterVariantFor(name)
+    return function(state)
+        return libUI(state).activeFilter == name and "primary" or "tertiary"
+    end
+end
+Selectors:Register("library.filterAllVariant",     filterVariantFor("all"))
+Selectors:Register("library.filterReadyVariant",   filterVariantFor("ready"))
+Selectors:Register("library.filterHasNoteVariant", filterVariantFor("has_note"))
+Selectors:Register("library.filterBlockedVariant", filterVariantFor("blocked"))
+
+-- ===========================================================================
+-- Stream tab selectors
+-- ===========================================================================
+
+local function streamLibraryID(state)
+    local viewLib = state.session and state.session.viewLocal and state.session.viewLocal.stream and state.session.viewLocal.stream.libraryID
+    local libs = state.account.libraries or {}
+    if viewLib and libs[viewLib] and not libs[viewLib].deletedAt then return viewLib end
+    return state.account.defaultLibraryID
+end
+
+local function currentCharacterKey()
+    if not (_G.UnitName and _G.GetRealmName) then return nil end
+    local name, realm = _G.UnitName("player"), _G.GetRealmName()
+    if name and name ~= "" and realm and realm ~= "" then return name .. "-" .. realm end
+    return nil
+end
+
+Selectors:Register("stream.items", function(state)
+    return Selectors.BuildStreamItems(state, currentCharacterKey())
+end)
+
+Selectors:Register("stream.statusText", function(state)
+    local items = Selectors:Call("stream.items", state)
+    local count = #items
+    if count > 0 then
+        return tostring(count) .. " " .. (count == 1 and "field note" or "field notes")
+    end
+    return "no saved field notes"
+end)
+
+Selectors:Register("stream.libraryDropdownLabel", function(state)
+    local libs = state.account.libraries or {}
+    local id = streamLibraryID(state)
+    local name = (id and libs[id] and libs[id].name) or "Library"
+    return name .. "  v"
+end)
+
+-- View-toggle "active" markers on the three header buttons.
+Selectors:Register("stream.captureActive", function(state)
+    return state.account.ui.view == "capture"
+end)
+Selectors:Register("stream.libraryActive", function(state)
+    return state.account.ui.view == "library"
+end)
+Selectors:Register("stream.configActive", function(state)
+    return state.account.ui.view == "config"
+end)
+Selectors:Register("stream.backActive", function(state)
+    local ui = state.account.ui
+    return (ui.selectedSetID == nil) and (ui.view == nil)
+end)
+
+-- ===========================================================================
+-- Detail tab selectors
+-- ===========================================================================
+
+local function detailSelectedSet(state)
+    local id = state.account.ui.selectedSetID
+    return id and state.account.sets and state.account.sets[id] or nil
+end
+
+local function detailGroupKey(state)
+    return state.session and state.session.ui and state.session.ui.selectedGroupKey or nil
+end
+
+local function detailSelectedEntry(state)
+    local set = detailSelectedSet(state)
+    if not set then return nil end
+    local idx = state.session and state.session.ui and state.session.ui.selectedEntryIndex
+    return idx and (set.entries or {})[idx] or nil
+end
+
+Selectors:Register("detail.mapGroupItems", function(state)
+    local set = detailSelectedSet(state)
+    if not set then return {} end
+    local groups = Selectors.BuildMapGroups(set)
+    local key = detailGroupKey(state)
+    for _, g in ipairs(groups) do g.selected = (g.key == key) end
+    return groups
+end)
+
+Selectors:Register("detail.coordItems", function(state)
+    local set = detailSelectedSet(state)
+    if not set then return {} end
+    local key = detailGroupKey(state)
+    local items = Selectors.BuildCoordinateItems(set, key)
+    local idx = state.session and state.session.ui and state.session.ui.selectedEntryIndex
+    for _, item in ipairs(items) do item.selected = (item.index == idx) end
+    return items
+end)
+
+Selectors:Register("detail.sourceItems", function(state)
+    local set = detailSelectedSet(state)
+    return Selectors.BuildSourceLineItems(set)
+end)
+
+Selectors:Register("detail.coordSummary", function(state)
+    return Selectors.FormatEntrySummary(detailSelectedEntry(state)) or ""
+end)
+
+Selectors:Register("detail.subtitle", function(state)
+    local entry = detailSelectedEntry(state)
+    if not entry then return "" end
+    local card = Selectors.BuildCurrentCardModel(entry)
+    if not (card and card.hasSelection) then return "" end
+    return string.format("%s - Coordinate - %s", card.map or "", card.coords or "")
+end)
+
+Selectors:Register("detail.sourceToggleLabel", function(state)
+    return state.session.ui.showSourceText and "Coordinates" or "Source Text"
+end)
+
+Selectors:Register("detail.scopeButtonLabel", function(state)
+    local CYCLES = VFN.Constants.CYCLES
+    local scope = state.session.ui.sendScope or CYCLES.sendScope.default
+    return CYCLES.sendScope.labels[scope] or scope
+end)
+
+-- ===========================================================================
+-- Config tab selectors
+-- ===========================================================================
+
+local function configValue(state, key)
+    return state.account.config and state.account.config[key]
+end
+
+Selectors:Register("config.backendLabel", function(state)
+    local CYCLES = VFN.Constants.CYCLES
+    local v = configValue(state, "waypointBackend") or CYCLES.waypointBackend.default
+    return CYCLES.waypointBackend.labels[v] or v
+end)
+
+Selectors:Register("config.charactersLabel", function(state)
+    local CYCLES = VFN.Constants.CYCLES
+    local v = configValue(state, "characterFilter") or CYCLES.characterFilter.default
+    return CYCLES.characterFilter.labels[v] or v
+end)
+
+Selectors:Register("config.minimapLabel", function(state)
+    return configValue(state, "showMinimapButton") and "Hide Minimap Button" or "Show Minimap Button"
+end)
+
+Selectors:Register("config.debugLabel", function(state)
+    return state.account.config.debug and "Debug: on" or "Debug: off"
+end)
+
+Selectors:Register("config.backendHint", function(state)
+    local CYCLES = VFN.Constants.CYCLES
+    local v = state.account.config.waypointBackend or CYCLES.waypointBackend.default
+    return (CYCLES.waypointBackend.hints and CYCLES.waypointBackend.hints[v]) or ""
+end)
+
+-- ===========================================================================
+-- Drawer (map preview panel) selectors
+-- ===========================================================================
+
+local function drawerSet(state)
+    local id = state.account.ui.selectedSetID
+    return id and state.account.sets and state.account.sets[id] or nil
+end
+
+local function drawerKey(state)
+    return state.session and state.session.ui and state.session.ui.selectedGroupKey or nil
+end
+
+-- Count entries matching the active group key (or all when key is nil).
+-- Used by both the title (first matching entry's group name) and subtitle
+-- ("N pins"). Keeping the walk in one place so the two stay in sync.
+local function drawerMatching(state)
+    local set, key = drawerSet(state), drawerKey(state)
+    local entries = (set and set.entries) or {}
+    local count, groupName = 0, nil
+    for _, entry in ipairs(entries) do
+        local match = (not key) or Selectors.GetEntryGroupKey(entry) == key
+        if match and entry.x and entry.y then
+            count = count + 1
+            if not groupName then groupName = Selectors.GetEntryGroupName(entry) end
+        end
+    end
+    return count, groupName
+end
+
+Selectors:Register("drawer.title", function(state)
+    local _, groupName = drawerMatching(state)
+    return groupName or "Map Drawer"
+end)
+
+Selectors:Register("drawer.subtitle", function(state)
+    local count = drawerMatching(state)
+    return tostring(count) .. " " .. (count == 1 and "pin" or "pins")
+end)
+
+local function drawerCard(state)
+    local set, key = drawerSet(state), drawerKey(state)
+    if not set then return Selectors.BuildCurrentCardModel(nil) end
+    local _, entry = Selectors.FindEntryInGroup(set, key, state.session.ui.selectedEntryIndex)
+    return Selectors.BuildCurrentCardModel(entry)
+end
+
+Selectors:Register("drawer.currentCardMap",    function(state) return drawerCard(state).map    or "" end)
+Selectors:Register("drawer.currentCardCoords", function(state) return drawerCard(state).coords or "" end)
+Selectors:Register("drawer.currentCardNote",   function(state) return drawerCard(state).note   or "" end)
+Selectors:Register("drawer.currentCardSource", function(state) return drawerCard(state).source or "" end)

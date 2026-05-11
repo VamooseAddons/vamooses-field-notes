@@ -483,6 +483,7 @@ VFN.LayoutConfig = {
                 size = 24,
                 tooltip = "Minimize / Expand",
             },
+            binding = { active = "stream.captureActive" },
         },
         -- Back-to-stream toggle. Same housing-stair-arrow atlases as the
         -- capture button, rotated 90 degrees clockwise so down -> left and
@@ -499,6 +500,7 @@ VFN.LayoutConfig = {
                 rotation = -1.5707963,                  -- -pi/2 (90 deg CW)
                 tooltip = "Back to Stream",
             },
+            binding = { active = "stream.backActive" },
         },
         ["streamPanel.libraryButton"] = {
             kind = "atlasButton", ["in"] = "streamPanel", slot = "header",
@@ -507,6 +509,7 @@ VFN.LayoutConfig = {
             -- Hidden in capture mode -- minimal view keeps just Expand + close.
             visibleInViews = { "collapsed", "detail", "library", "config" },
             options = { atlas = "decor-placement-list", size = 24, tooltip = "Library" },
+            binding = { active = "stream.libraryActive" },
         },
         ["streamPanel.configButton"] = {
             kind = "atlasButton", ["in"] = "streamPanel", slot = "header",
@@ -514,6 +517,7 @@ VFN.LayoutConfig = {
             -- Cog -- mirrors HDG HouseTab's Customise / Settings toggle.
             visibleInViews = { "collapsed", "detail", "library", "config" },
             options = { atlas = "decor-controls-settings", size = 24, tooltip = "Config" },
+            binding = { active = "stream.configActive" },
         },
         ["streamPanel.closeButton"] = {
             kind = "closebutton", ["in"] = "streamPanel", slot = "header",
@@ -534,17 +538,20 @@ VFN.LayoutConfig = {
             kind = "labelDim", ["in"] = "mainPanel", slot = "header",
             text = "", font = "small",
             height = 14, order = 20,
+            binding = "detail.subtitle",
         },
 
         ["drawerPanel.title"] = {
             kind = "label", ["in"] = "drawerPanel", slot = "header",
             text = "Map Drawer", font = "subheading",
             height = 16, width = 180, order = 10,
+            binding = "drawer.title",
         },
         ["drawerPanel.subtitle"] = {
             kind = "labelDim", ["in"] = "drawerPanel", slot = "header",
             text = "auto preview", font = "small",
             height = 12, width = 140, order = 20,
+            binding = "drawer.subtitle",
         },
 
         -- ===== Stream capture form =====
@@ -632,15 +639,18 @@ VFN.LayoutConfig = {
         ["streamPanel.libraryDropdown"] = {
             kind = "button", ["in"] = "stream.streamListHeader", font = "button",
             text = "Default", width = "auto", height = 20, order = 10, variant = "tertiary",
+            binding = { text = "stream.libraryDropdownLabel" },
         },
         ["streamPanel.streamStatus"] = {
             kind = "labelDim", ["in"] = "stream.streamListHeader", font = "small",
             justifyH = "RIGHT", width = "fill", height = 14, order = 20,
             text = "no saved field notes",
+            binding = "stream.statusText",
         },
         ["streamPanel.streamList"] = {
             kind = "scrollbox", ["in"] = "stream.streamList",
             order = 20,
+            binding = "stream.items",
             options = { rowKind = "streamRow", spacing = 2 },
         },
 
@@ -670,6 +680,7 @@ VFN.LayoutConfig = {
         -- ===== Main panel body =====
         ["mainPanel.mapGroupList"] = {
             kind = "scrollbox", ["in"] = "main.groupRail",
+            binding = "detail.mapGroupItems",
             options = { rowKind = "groupRow", spacing = 1 },
         },
         ["mainPanel.mapPreviewButton"] = {
@@ -679,22 +690,27 @@ VFN.LayoutConfig = {
         ["mainPanel.sourceToggleButton"] = {
             kind = "button", ["in"] = "main.coordBar", font = "button",
             text = "Source Text", width = "auto", order = 20, variant = "tertiary",
+            binding = { text = "detail.sourceToggleLabel" },
         },
         ["mainPanel.coordSummary"] = {
             kind = "labelDim", ["in"] = "main.coordBar", font = "small",
             order = 30, text = "",
+            binding = "detail.coordSummary",
         },
         ["mainPanel.coordinateList"] = {
             kind = "scrollbox", ["in"] = "main.coordList",
+            binding = "detail.coordItems",
             options = { rowKind = "coordRow", spacing = 4 },
         },
         ["mainPanel.sourceLineList"] = {
             kind = "scrollbox", ["in"] = "main.coordList",
+            binding = "detail.sourceItems",
             options = { rowKind = "sourceLineRow", spacing = 4 },
         },
         ["mainPanel.scopeButton"] = {
             kind = "button", ["in"] = "main.actionRow", font = "button",
             text = "Scope: selected coordinate", width = "auto", height = 24, order = 10, variant = "tertiary",
+            binding = { text = "detail.scopeButtonLabel" },
         },
         ["mainPanel.sendButton"] = {
             kind = "button", ["in"] = "main.actionRow", font = "button",
@@ -716,18 +732,22 @@ VFN.LayoutConfig = {
         ["drawerPanel.currentCardMap"] = {
             kind = "labelDim", ["in"] = "drawer.currentCard", font = "subheading",
             text = "Select a pin", height = 16, order = 10,
+            binding = "drawer.currentCardMap",
         },
         ["drawerPanel.currentCardCoords"] = {
             kind = "label", ["in"] = "drawer.currentCard", font = "heading",
             text = "", height = 22, order = 20,
+            binding = "drawer.currentCardCoords",
         },
         ["drawerPanel.currentCardNote"] = {
             kind = "labelDim", ["in"] = "drawer.currentCard", font = "body",
             text = "", height = 14, order = 30,
+            binding = "drawer.currentCardNote",
         },
         ["drawerPanel.currentCardSource"] = {
             kind = "labelDim", ["in"] = "drawer.currentCard", font = "caption",
             text = "", height = 12, order = 40,
+            binding = "drawer.currentCardSource",
         },
         ["drawerPanel.setNoteTitle"] = {
             kind = "label", ["in"] = "drawer.setNoteCard", font = "subheading",
@@ -757,6 +777,7 @@ VFN.LayoutConfig = {
             kind = "labelDim", ["in"] = "libraryPanel", slot = "header",
             text = "all field notes across all characters", font = "body",
             height = 14, order = 20,
+            binding = "library.subtitleText",
         },
 
         -- ===== Library: index column (left) =====
@@ -775,6 +796,7 @@ VFN.LayoutConfig = {
         ["libraryPanel.indexList"] = {
             kind = "scrollbox", ["in"] = "library.index",
             order = 10,
+            binding = "library.indexItems",
             options = { rowKind = "libraryIndexRow", spacing = 1 },
         },
         -- Library-level actions: "+ New" inline; Rename and Delete live on
@@ -800,6 +822,7 @@ VFN.LayoutConfig = {
         ["libraryPanel.cardsHeader"] = {
             kind = "labelStatus", ["in"] = "library.cards", font = "small",
             text = "", justifyH = "LEFT", height = 12, order = 3,
+            binding = "library.cardsHeaderText",
         },
         ["libraryPanel.searchBox"] = {
             kind = "editbox", ["in"] = "library.searchRow", font = "body",
@@ -808,6 +831,7 @@ VFN.LayoutConfig = {
         ["libraryPanel.sortButton"] = {
             kind = "button", ["in"] = "library.searchRow", font = "button",
             text = "Recent", width = 80, height = 22, order = 20, variant = "tertiary",
+            binding = { text = "library.sortLabel" },
         },
         -- Filter chips -- variant carries semantic colour (see Theme.Skinners.StatusChip).
         -- Controller toggles the active chip via SetVariant.
@@ -830,19 +854,23 @@ VFN.LayoutConfig = {
         ["libraryPanel.cardsList"] = {
             kind = "scrollbox", ["in"] = "library.cards",
             order = 30,
+            binding = "library.cardItems",
             options = { rowKind = "libraryCardRow", spacing = 2 },
         },
         ["libraryPanel.sendWaypointsButton"] = {
             kind = "button", ["in"] = "library.cardsActions", font = "button",
             text = "Send Waypoints", width = "auto", height = 24, order = 10, variant = "primary",
+            binding = { enabled = "library.sendCardEnabled" },
         },
         ["libraryPanel.moveToButton"] = {
             kind = "button", ["in"] = "library.cardsActions", font = "button",
             text = "Move to...", width = "auto", height = 24, order = 20, variant = "tertiary",
+            binding = { enabled = "library.moveCardEnabled" },
         },
         ["libraryPanel.deleteCardButton"] = {
             kind = "button", ["in"] = "library.cardsActions", font = "button",
             text = "Delete", width = "auto", height = 24, order = 30, variant = "danger",
+            binding = { enabled = "library.deleteCardEnabled" },
         },
 
         -- ===== Library: curator column (right) =====
@@ -861,16 +889,19 @@ VFN.LayoutConfig = {
             kind = "statCard", ["in"] = "library.statRow",
             options = { value = "0", label = "COORDS" },
             order = 10,
+            binding = { value = "library.statCoordsValue", label = "static:COORDS" },
         },
         ["libraryPanel.statMaps"] = {
             kind = "statCard", ["in"] = "library.statRow",
             options = { value = "-", label = "MAP" },
             order = 20,
+            binding = { value = "library.statMapsValue", label = "static:MAP" },
         },
         ["libraryPanel.statStatus"] = {
             kind = "statCard", ["in"] = "library.statRow",
             options = { value = "-", label = "STATUS" },
             order = 30,
+            binding = { value = "library.statStatusValue", label = "static:STATUS" },
         },
         ["libraryPanel.titleHeader"] = {
             kind = "label", ["in"] = "library.coords", font = "subheading",
@@ -879,6 +910,7 @@ VFN.LayoutConfig = {
         ["libraryPanel.titleBox"] = {
             kind = "editbox", ["in"] = "library.coords", font = "body",
             height = 28, order = 11, options = { placeholder = "Untitled Field Note" },
+            binding = "library.titleEditValue",
         },
         ["libraryPanel.noteHeader"] = {
             kind = "label", ["in"] = "library.coords", font = "subheading",
@@ -887,18 +919,22 @@ VFN.LayoutConfig = {
         ["libraryPanel.noteBox"] = {
             kind = "editbox", ["in"] = "library.coords", font = "body",
             height = 60, order = 21, options = { multiline = true, placeholder = "Add a note..." },
+            binding = "library.noteEditValue",
         },
         ["libraryPanel.previewHeader"] = {
             kind = "label", ["in"] = "library.previewHeaderRow", font = "subheading",
             text = "Coordinates", justifyH = "LEFT", width = "fill", height = 16, order = 10,
+            binding = "library.previewHeaderText",
         },
         ["libraryPanel.previewCopyButton"] = {
             kind = "button", ["in"] = "library.previewHeaderRow", font = "button",
             text = "Copy coords", width = "auto", height = 18, order = 20, variant = "tertiary",
+            binding = { enabled = "library.copyCoordsEnabled" },
         },
         ["libraryPanel.coordsPreviewList"] = {
             kind = "scrollbox", ["in"] = "library.coords",
             order = 60,
+            binding = "library.previewItems",
             options = { rowKind = "libraryCoordPreviewRow", spacing = 1 },
         },
         ["libraryPanel.coordsActionStatus"] = {
@@ -908,10 +944,12 @@ VFN.LayoutConfig = {
         ["libraryPanel.coordsSaveButton"] = {
             kind = "button", ["in"] = "library.coordsActions", font = "button",
             text = "Save", width = "auto", height = 24, order = 10, variant = "primary",
+            binding = { enabled = "library.saveEnabled" },
         },
         ["libraryPanel.coordsRestoreButton"] = {
             kind = "button", ["in"] = "library.coordsActions", font = "button",
             text = "Restore", width = "auto", height = 24, order = 20, variant = "tertiary",
+            binding = { enabled = "library.restoreEnabled" },
         },
 
         -- ===== Config panel header + body =====
@@ -927,10 +965,12 @@ VFN.LayoutConfig = {
         ["configPanel.backendButton"] = {
             kind = "button", ["in"] = "config.body", font = "button",
             text = "Backend: auto", width = "auto", height = 24, order = 11, variant = "tertiary",
+            binding = { text = "config.backendLabel" },
         },
         ["configPanel.backendHint"] = {
             kind = "labelDim", ["in"] = "config.body", font = "small",
             text = "", height = 14, order = 12,
+            binding = "config.backendHint",
         },
         -- Section: stream filter
         ["configPanel.charsHeader"] = {
@@ -940,6 +980,7 @@ VFN.LayoutConfig = {
         ["configPanel.charsButton"] = {
             kind = "button", ["in"] = "config.body", font = "button",
             text = "Chars: current", width = "auto", height = 24, order = 21, variant = "tertiary",
+            binding = { text = "config.charactersLabel" },
         },
         ["configPanel.charsHint"] = {
             kind = "labelDim", ["in"] = "config.body", font = "small",
@@ -954,6 +995,7 @@ VFN.LayoutConfig = {
         ["configPanel.debugButton"] = {
             kind = "button", ["in"] = "config.body", font = "button",
             text = "Debug: off", width = "auto", height = 24, order = 31, variant = "tertiary",
+            binding = { text = "config.debugLabel" },
         },
         -- Section: actions (destructive)
         ["configPanel.resetButton"] = {

@@ -87,7 +87,7 @@ local _streamRowBase = CH.UI.MakeStackedRowFactory({
             else
                 -- Clear any active library/config view so the mode picker
                 -- falls through to "detail" once the set is selected.
-                CH.Mechanics.DispatchUI("view", nil)
+                CH.Mechanics.SetUIPersistent("view", nil)
                 CH.Mechanics.OpenSet(ed.setID)
             end
         end
@@ -353,9 +353,9 @@ local function ToggleView(target)
     return function()
         local current = CH.Mechanics.GetUI().view
         if current == target then
-            CH.Mechanics.DispatchUI("view", nil)
+            CH.Mechanics.SetUIPersistent("view", nil)
         else
-            CH.Mechanics.DispatchUI("view", target)
+            CH.Mechanics.SetUIPersistent("view", target)
         end
     end
 end
@@ -429,7 +429,7 @@ function StreamController:Wire(rootFrame)
             if first and first.setID then CH.Mechanics.OpenSet(first.setID) end
         else
             if selectedSetID then CH.Mechanics.CloseSet() end
-            CH.Mechanics.DispatchUI("view", nil)
+            CH.Mechanics.SetUIPersistent("view", nil)
         end
     end)
 
@@ -465,52 +465,16 @@ function StreamController:Wire(rootFrame)
     end
 end
 
-function StreamController:Refresh(rootFrame, ctx)
-    local items = VFN.Selectors.BuildStreamItems(ctx and ctx.state, GetCurrentCharacterKey())
-    SetStreamStatus(rootFrame, #items)
-
-    local list = W(rootFrame, "streamPanel.streamList")
-    if list and list.SetItems then list:SetItems(items, true) end
-
-    -- Library-dropdown label: name of the library whose cards the selector
-    -- just walked. Mirrors BuildStreamItems' own resolution (viewLocal
-    -- override falls back to defaultLibraryID when nil or stale).
-    do
-        local state = ctx and ctx.state
-        local libs = (state and state.account and state.account.libraries) or {}
-        local viewLib = (state and state.session and state.session.viewLocal
-            and state.session.viewLocal.stream
-            and state.session.viewLocal.stream.libraryID) or nil
-        local libID = (viewLib and libs[viewLib] and not libs[viewLib].deletedAt)
-            and viewLib or (state and state.account and state.account.defaultLibraryID)
-        local name = (libID and libs[libID] and libs[libID].name) or "Library"
-        local dropdown = W(rootFrame, "streamPanel.libraryDropdown")
-        CH.UI.SetButtonText(dropdown, name .. "  v")
-    end
-
-    -- Active-view marker on the switcher buttons. Tertiary buttons don't
-    -- have a built-in "selected" state, so we prefix the label with `[v] `
-    -- when active. Use SetButtonText so the auto-width refreshes.
-    local view = (ctx and ctx.state and ctx.state.account and ctx.state.account.ui and ctx.state.account.ui.view) or nil
-    -- All three header toggles are icon buttons now. SetActive flips them
-    -- to their active atlas variant:
-    --   capture -> housing-stair-arrow-up (escape back to full)
-    --   library -> decor-placement-list-active
-    --   config  -> decor-controls-settings-active
-    local capBtn = W(rootFrame, "streamPanel.captureButton")
-    if capBtn and capBtn.SetActive then capBtn:SetActive(view == "capture") end
-    local libBtn = W(rootFrame, "streamPanel.libraryButton")
-    if libBtn and libBtn.SetActive then libBtn:SetActive(view == "library") end
-    local cfgBtn = W(rootFrame, "streamPanel.configButton")
-    if cfgBtn and cfgBtn.SetActive then cfgBtn:SetActive(view == "config") end
-    -- Back-to-stream arrow: rotated arrow-down (points left) when there's
-    -- something to collapse, rotated arrow-up (points right) when we're
-    -- already on the just-stream rail.
-    local hasSelection = (ctx and ctx.state and ctx.state.account and ctx.state.account.ui
-        and ctx.state.account.ui.selectedSetID) ~= nil
-    local atStream = (not hasSelection) and view == nil
-    local backBtn = W(rootFrame, "streamPanel.backButton")
-    if backBtn and backBtn.SetActive then backBtn:SetActive(atStream) end
+-- Refresh is empty -- every stream-tab widget value flows through the
+-- BindingEngine via the spec's `binding` field:
+--   streamList     -> stream.items
+--   streamStatus   -> stream.statusText
+--   libraryDropdown-> stream.libraryDropdownLabel
+--   captureBtn     -> stream.captureActive
+--   libraryBtn     -> stream.libraryActive
+--   configBtn      -> stream.configActive
+--   backBtn        -> stream.backActive
+function StreamController:Refresh(_rootFrame, _ctx)
 end
 
 VFN.Controllers:Register("stream", StreamController)

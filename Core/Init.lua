@@ -39,11 +39,11 @@ SLASH_VFN1 = "/vfn"
 SlashCmdList["VFN"] = function(msg)
     msg = strtrim(msg or ""):lower()
     if msg == "debug" and VFN.Store then
-        VFN.Store:Dispatch("VFN_CONFIG_SET", { key = "debug", value = not VFN.Store:GetState().config.debug })
+        VFN.Store:Dispatch(VFN.Constants.ACTIONS.CONFIG_SET, { key = "debug", value = not VFN.Store:GetState().config.debug })
     elseif msg == "minimap" and VFN.Store then
-        VFN.Store:Dispatch("VFN_CONFIG_SET", { key = "showMinimapButton", value = not VFN.Store:GetState().config.showMinimapButton })
+        VFN.Store:Dispatch(VFN.Constants.ACTIONS.CONFIG_SET, { key = "showMinimapButton", value = not VFN.Store:GetState().config.showMinimapButton })
     elseif msg == "hardreset" and VFN.Store then
-        VFN.Store:Dispatch("VFN_HARD_RESET")
+        VFN.Store:Dispatch(VFN.Constants.ACTIONS.HARD_RESET)
     elseif msg == "seed" and VFN.LibrarySeeder then
         VFN.LibrarySeeder:Run()
     elseif msg == "" or msg == "toggle" then

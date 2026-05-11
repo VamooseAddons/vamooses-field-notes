@@ -41,6 +41,7 @@ UI/LayoutRegistry.lua
 UI/Components.lua
 UI/Panels.lua
 UI/Layout.lua
+UI/BindingEngine.lua
 UI/Controllers.lua
 UI/Controller_Helpers.lua
 UI/Controller_Helpers_Mechanics.lua

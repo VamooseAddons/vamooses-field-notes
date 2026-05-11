@@ -19,11 +19,13 @@ VFN.LibrarySeeder = VFN.LibrarySeeder or {}
 
 local LibrarySeeder = VFN.LibrarySeeder
 
--- Resolve a library by name (case-sensitive). Returns libraryID or nil.
-local function FindLibraryByName(state, name)
-    if not (state and state.account and state.account.libraries) then return nil end
+-- Resolve a library by its stable seedKey. Rename-safe: the user can rename
+-- a seeded library and the seeder still finds it via the key. Returns
+-- libraryID or nil.
+local function FindLibraryBySeedKey(state, seedKey)
+    if not (state and state.account and state.account.libraries and seedKey) then return nil end
     for libID, lib in pairs(state.account.libraries) do
-        if lib.name == name and not lib.deletedAt then return libID end
+        if lib.seedKey == seedKey and not lib.deletedAt then return libID end
     end
     return nil
 end
@@ -68,20 +70,25 @@ local function BuildSourceLines(vendors)
     return lines
 end
 
+local DECOR_VENDORS_SEED_KEY = "decor-vendors"
+
 local function SeedDecorVendors()
     local db = _G.VFN_DecorVendorsDB
     if not (db and db.zones and db.libraryName) then return end
     if not (VFN.Store and VFN.Store.GetState and VFN.Store.CreateSet) then return end
 
     local state = VFN.Store:GetState()
-    if FindLibraryByName(state, db.libraryName) then
-        return  -- already seeded; idempotent no-op
+    if FindLibraryBySeedKey(state, DECOR_VENDORS_SEED_KEY) then
+        return  -- already seeded; idempotent no-op (survives renames)
     end
 
-    -- Create the library, then look it up by name to capture its generated ID.
-    VFN.Store:Dispatch("VFN_LIBRARY_CREATE", { name = db.libraryName })
-    state = VFN.Store:GetState()
-    local libraryID = FindLibraryByName(state, db.libraryName)
+    -- Create the library and use the libraryID Dispatch returns. The seedKey
+    -- stamps the library so a later rename can't trick the next seed-run.
+    local result = VFN.Store:Dispatch(VFN.Constants.ACTIONS.LIBRARY_CREATE, {
+        name    = db.libraryName,
+        seedKey = DECOR_VENDORS_SEED_KEY,
+    })
+    local libraryID = result and result.libraryID
     if not libraryID then return end  -- creation rejected (cap?), nothing more to do
 
     local createdCount = 0
@@ -107,7 +114,7 @@ local function SeedDecorVendors()
 
     if createdCount > 0 then
         VFN.Store:RebuildIndexes()
-        VFN.Store:_Notify("VFN_LIBRARY_SEEDED")
+        VFN.Store:_Notify(VFN.Constants.NOTIFICATIONS.LIBRARY_SEEDED)
     end
 end
 

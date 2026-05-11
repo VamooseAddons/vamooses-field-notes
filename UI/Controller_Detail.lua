@@ -12,7 +12,7 @@ local DetailController = VFN.DetailController
 local CH = VFN.ControllerHelpers
 local W, SetText = CH.UI.W, CH.UI.SetText
 local GetUI = CH.Mechanics.GetUI
-local DispatchUI, GetSelectedSet = CH.Mechanics.DispatchUI, CH.Mechanics.GetSelectedSet
+local SetUITransient, GetSelectedSet = CH.Mechanics.SetUITransient, CH.Mechanics.GetSelectedSet
 
 -- Cycle definitions live in VFN.Constants.CYCLES so they can grow / be
 -- localised in one place. We just reference them here.
@@ -67,8 +67,8 @@ local function groupRowFactory(template)
             if row.SetHeight then row:SetHeight(template.height) end
             if row.SetScript then
                 row:SetScript("OnClick", function()
-                    DispatchUI("selectedGroupKey", ed.key)
-                    DispatchUI("selectedEntryIndex", nil)
+                    SetUITransient("selectedGroupKey", ed.key)
+                    SetUITransient("selectedEntryIndex", nil)
                 end)
             end
         end,
@@ -149,7 +149,7 @@ local function coordRowFactory(template)
             if row.vfnLabel  then row.vfnLabel:SetText(ed.label or "")  end
             if row.SetHeight then row:SetHeight(template.height) end
             if row.SetScript then
-                row:SetScript("OnClick", function() DispatchUI("selectedEntryIndex", ed.index) end)
+                row:SetScript("OnClick", function() SetUITransient("selectedEntryIndex", ed.index) end)
             end
         end,
         Reset = function(row)
@@ -179,7 +179,7 @@ local function EnsureSelectedGroup(groups)
     local ui = GetUI()
     local found = VFN.Selectors.FindGroupByKey(groups, ui.selectedGroupKey)
     if found then return found end
-    DispatchUI("selectedGroupKey", VFN.Selectors.FirstGroupKey(groups))
+    SetUITransient("selectedGroupKey", VFN.Selectors.FirstGroupKey(groups))
     return groups and groups[1] or nil
 end
 
@@ -187,7 +187,7 @@ local function EnsureSelectedEntry(set, key)
     local ui = GetUI()
     local index, entry = VFN.Selectors.FindEntryInGroup(set, key, ui.selectedEntryIndex)
     if index ~= ui.selectedEntryIndex then
-        DispatchUI("selectedEntryIndex", index)
+        SetUITransient("selectedEntryIndex", index)
     end
     return index, entry
 end
@@ -216,7 +216,7 @@ end
 local function LogAndStatus(rootFrame, text)
     SetActionStatus(rootFrame, text)
     if VFN.Store and VFN.Store.Dispatch then
-        CH.Mechanics.Dispatch("VFN_APPLY_LOG_APPEND", { line = text })
+        CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.APPLY_LOG_APPEND, { line = text })
     end
 end
 
@@ -261,11 +261,11 @@ function DetailController:Wire(rootFrame)
     -- (Backend cycle wiring moved to Controller_Config.)
 
     CH.UI.OnClick(rootFrame, "mainPanel.mapPreviewButton", function()
-        CH.Mechanics.Dispatch("VFN_UI_TOGGLE_MAP")
+        CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.UI_TOGGLE_MAP)
     end)
 
     CH.UI.OnClick(rootFrame, "mainPanel.sourceToggleButton", function()
-        DispatchUI("showSourceText", not GetUI().showSourceText)
+        SetUITransient("showSourceText", not GetUI().showSourceText)
     end)
 
     CH.UI.OnClick(rootFrame, "mainPanel.scopeButton", function()
@@ -301,66 +301,38 @@ local function setVis(widget, shown)
     else if widget.Hide then widget:Hide() end end
 end
 
+-- Refresh handles only the imperative side effects that bindings can't:
+--   1. EnsureSelectedGroup / EnsureSelectedEntry -- self-healing writes
+--      that pick a default selection when the previous one is stale. These
+--      mutate state, so they can't live in a (pure) selector.
+--   2. mapPreviewButton variant -- Button factory doesn't expose SetVariant,
+--      so we route through Theme:RegisterVariant. Same fix as the filter
+--      chips: until Button grows variant support OR these become kind="chip",
+--      the paint stays here.
+--   3. coordinateList / sourceLineList show/hide -- bindings handle the
+--      list items, but the visibility toggle is imperative.
 function DetailController:Refresh(rootFrame, ctx)
     ctx = ctx or {}
     local hasSelection = ctx.hasSelection == true
     local _, set = GetSelectedSet()
     local ui = GetUI()
 
-    -- (Backend label refresh moved to Controller_Config along with the cycle
-    -- button itself.)
-
     local map = ui.map
     local mapShown = not map or map.shown ~= false
-    -- Map Preview button: text stays constant, variant flips to "primary"
-    -- (accent fill) when the preview is showing so the toggle state reads
-    -- visually without a text change.
     local mapBtn = W(rootFrame, "mainPanel.mapPreviewButton")
     if mapBtn and VFN.Theme and VFN.Theme.RegisterVariant then
         VFN.Theme:RegisterVariant(mapBtn, "Button", mapShown and "primary" or "tertiary")
     end
-    CH.UI.SetButtonText(W(rootFrame, "mainPanel.sourceToggleButton"),
-        ui.showSourceText and "Coordinates" or "Source Text")
-
-    local scope = ui.sendScope or CYCLES.sendScope.default
-    CH.UI.SetButtonText(W(rootFrame, "mainPanel.scopeButton"), CYCLES.sendScope.labels[scope])
 
     if not hasSelection then return end
 
     local groups = VFN.Selectors.BuildMapGroups(set)
     EnsureSelectedGroup(groups)
     local key = GetUI().selectedGroupKey
-    local selectedIdx, selectedEntry = EnsureSelectedEntry(set, key)
-    local coordItems = VFN.Selectors.BuildCoordinateItems(set, key)
-    local sourceItems = VFN.Selectors.BuildSourceLineItems(set)
+    EnsureSelectedEntry(set, key)
 
-    for _, g in ipairs(groups) do
-        g.selected = (g.key == key)
-    end
-    for _, item in ipairs(coordItems) do
-        item.selected = (item.index == selectedIdx)
-    end
-
-    SetText(W(rootFrame, "mainPanel.coordSummary"), VFN.Selectors.FormatEntrySummary(selectedEntry))
-
-    -- Detail-header subtitle: selected entry's location + coord ("Founder's
-    -- Point - Coordinate - 50.0, 33.3"). Mirrors the drawer's current card
-    -- but lives in the header so the user always sees context next to the
-    -- title.
-    local card = VFN.Selectors.BuildCurrentCardModel(selectedEntry)
-    local subtitle = ""
-    if card.hasSelection then
-        subtitle = string.format("%s - Coordinate - %s", card.map or "", card.coords or "")
-    end
-    SetText(W(rootFrame, "mainPanel.subtitle"), subtitle)
-
-    local groupList  = W(rootFrame, "mainPanel.mapGroupList")
     local coordList  = W(rootFrame, "mainPanel.coordinateList")
     local sourceList = W(rootFrame, "mainPanel.sourceLineList")
-    if groupList  and groupList.SetItems  then groupList:SetItems(groups, true) end
-    if coordList  and coordList.SetItems  then coordList:SetItems(coordItems, true) end
-    if sourceList and sourceList.SetItems then sourceList:SetItems(sourceItems, true) end
-
     setVis(coordList,  not ui.showSourceText)
     setVis(sourceList, ui.showSourceText)
 end

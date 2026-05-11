@@ -27,29 +27,24 @@ function ConfigController:Wire(rootFrame)
     end)
     CH.UI.OnClick(rootFrame, "configPanel.debugButton", function()
         local cur = CH.Mechanics.GetConfigValue("debug", false)
-        CH.Mechanics.Dispatch("VFN_CONFIG_SET", { key = "debug", value = not cur })
+        CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.CONFIG_SET, { key = "debug", value = not cur })
     end)
     CH.UI.OnClick(rootFrame, "configPanel.resetButton", function()
         CH.UI.Confirm({
-            id     = "VFN_HARD_RESET",
+            id     = VFN.Constants.ACTIONS.HARD_RESET,
             text   = "Wipe ALL Field Notes and settings?\n\nThis cannot be undone.",
             accept = "Wipe",
-            onAccept = function() CH.Mechanics.Dispatch("VFN_HARD_RESET") end,
+            onAccept = function() CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.HARD_RESET) end,
         })
     end)
 end
 
-function ConfigController:Refresh(rootFrame, _ctx)
-    local be = CH.Mechanics.GetConfigValue("waypointBackend", CYCLES.waypointBackend.default)
-    CH.UI.SetButtonText(W(rootFrame, "configPanel.backendButton"), CYCLES.waypointBackend.labels[be])
-    SetText(W(rootFrame, "configPanel.backendHint"),
-        (CYCLES.waypointBackend.hints and CYCLES.waypointBackend.hints[be]) or "")
-
-    local cf = CH.Mechanics.GetConfigValue("characterFilter", CYCLES.characterFilter.default)
-    CH.UI.SetButtonText(W(rootFrame, "configPanel.charsButton"), CYCLES.characterFilter.labels[cf])
-
-    local debug = CH.Mechanics.GetConfigValue("debug", false)
-    CH.UI.SetButtonText(W(rootFrame, "configPanel.debugButton"), debug and "Debug: on" or "Debug: off")
+-- Refresh is empty -- every config-tab widget value flows through bindings:
+--   backendButton -> config.backendLabel
+--   backendHint   -> config.backendHint
+--   charsButton   -> config.charactersLabel
+--   debugButton   -> config.debugLabel
+function ConfigController:Refresh(_rootFrame, _ctx)
 end
 
 VFN.Controllers:Register("config", ConfigController)
