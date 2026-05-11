@@ -1,0 +1,56 @@
+## Interface: 120005
+## Title: Vamoose's Field Notes
+## Notes: Save, resolve, and replay pasted coordinate notes
+## Author: Vamoose
+## Version: 0.1.0
+## SavedVariables: VFN_DB
+## IconTexture: Interface\Icons\INV_Misc_Note_01
+## Category-enUS: Vamoose
+
+# Embedded Libraries
+Libs\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
+# Core
+Core/SchemeConstants.lua
+Core/Constants.lua
+Core/L.lua
+Core/Store.lua
+Core/Init.lua
+
+# Data
+Data/VFN_MapAliasDB.lua
+Data/VFN_DecorVendorsDB.lua
+
+# Modules
+Modules/CoordParser.lua
+Modules/CoordResolver.lua
+Modules/PublicAPI.lua
+Modules/WaypointBackend.lua
+Modules/WorldMapPins.lua
+Modules/WorldMapPins.xml
+Modules/MapRenderer.lua
+Modules/VFN_LibrarySeeder.lua
+
+# UI
+UI/Theme.lua
+UI/LayoutConfig.lua
+UI/LayoutRegistry.lua
+UI/Components.lua
+UI/Panels.lua
+UI/Layout.lua
+UI/Controllers.lua
+UI/Controller_Helpers.lua
+UI/Controller_Helpers_Mechanics.lua
+UI/Controller_Helpers_UI.lua
+UI/RowBehaviours.lua
+UI/Selectors.lua
+UI/Controller_Stream.lua
+UI/Controller_Drawer.lua
+UI/Controller_Detail.lua
+UI/Controller_Library.lua
+UI/Controller_Config.lua
+UI/MainFrame.lua
+UI/Minimap.lua

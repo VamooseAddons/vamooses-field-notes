@@ -1,0 +1,54 @@
+## v0.1.0 (2026-05-11) - First public release
+
+The first version of Vamoose's Field Notes on CurseForge. This release
+covers the full capture-and-replay loop: paste coordinates from anywhere,
+get clickable waypoints in-game, and curate them into reusable libraries.
+
+### Capture
+
+Open the window with `/vfn` and paste anything that contains coordinates --
+Wowhead blocks, chat-link map pins, `/way` commands, or naked decimals.
+The parser handles:
+
+- `/way 42.1 56.8 Spot name`
+- `/way Harandar 42.1 56.8 Spot name` (named zones)
+- `/way #2480 42.1 56.8 Spot name` (numeric mapID)
+- Multi-line paste with mixed zones (resolves each line against its
+  nearest zone header)
+- Naked `42.1, 56.8` (falls back to your current zone)
+- Chat-link map pins (paste the link straight in)
+
+Hit **Send Waypoints** -- VFN ships the lot to TomTom (preferred),
+Blizzard's pin system, or the in-game map (fallback). **Pin Here** does a
+one-click save of your current location.
+
+### The Library
+
+Three-column workspace:
+
+- **Libraries** -- your collections; auto-collected captures live in
+  Default. Right-click any library for Rename / Delete.
+- **Finder** -- search box, filter chips (All / Ready / Has Note /
+  Blocked), and a sort cycle. Right-click a card for "Move to..." to
+  drop it in another library.
+- **Curator** -- title + note are editable; the coord preview is
+  read-only. Click a single coord to send a one-shot waypoint, or use
+  the action row's Send Waypoints to route the whole card.
+
+Status chips on each card tell you at a glance whether a note is
+**ready** to send, has a **note** attached, came from a **source** paste,
+or is in the **default** library.
+
+### Pre-loaded: Decor Vendors
+
+Ships with a curated **Decor Vendors** library -- 92 zones, 200+ vendor
+coordinates, sourced from the Housing Decor Guide. Use it to fast-route
+decor shopping trips. The seeder is idempotent and re-runnable via
+`/vfn seed`.
+
+### Other
+
+- Minimap button (toggle with `/vfn minimap`)
+- World-map pins for visible field notes
+- SavedVariables: all libraries + captures persist across reloads
+- Account-scoped storage so every character sees the same set

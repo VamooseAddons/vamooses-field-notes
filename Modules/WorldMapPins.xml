@@ -1,0 +1,15 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <Button name="VFNWorldMapPinTemplate" mixin="MapCanvasPinMixin,VFNWorldMapPinMixin" virtual="true">
+        <Size x="14" y="14"/>
+        <Layers>
+            <Layer level="OVERLAY">
+                <Texture parentKey="Dot" atlas="WhiteCircle-RaidBlips" useAtlasSize="false">
+                    <Size x="10" y="10"/>
+                    <Anchors>
+                        <Anchor point="CENTER"/>
+                    </Anchors>
+                </Texture>
+            </Layer>
+        </Layers>
+    </Button>
+</Ui>
