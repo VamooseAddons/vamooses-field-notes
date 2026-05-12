@@ -39,10 +39,6 @@ function Controllers:Register(name, controller)
     return true
 end
 
-function Controllers:Get(name)
-    return self.byName[name]
-end
-
 function Controllers:Each(fn)
     -- Iterate in registration order so behaviour wiring is deterministic.
     for _, name in ipairs(self.ordered) do

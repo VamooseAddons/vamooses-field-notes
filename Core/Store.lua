@@ -41,6 +41,7 @@ local function NewConfig()
         showMinimapButton = true,
         characterFilter = "current",
         waypointBackend = "auto",
+        scheme = "ColorblindSafe",   -- name of the active VFN_SchemeConstants entry
     }
 end
 
@@ -54,6 +55,7 @@ local function NewUIState()
         streamCharacter = nil,
         selectedSetID = nil,
         view = nil,                 -- which tab is active ("library" | "config" | nil)
+        mainWindowShown = false,    -- main frame shown? toggled via MAIN_WINDOW_TOGGLE; persisted across /reload
         map = {
             mode = "docked",
             shown = true,
@@ -63,36 +65,34 @@ local function NewUIState()
     }
 end
 
--- Session-only UI state: never persisted to SavedVariables. Reset to
--- defaults on every /reload. Lives here for the same reasons account.ui
--- exists (one place to look) but the bucket name documents the lifetime.
+-- Session-only UI state: never persisted to SavedVariables. Reset to defaults
+-- on every /reload. The session bucket as a whole is the persistence
+-- boundary (state.session.* is never flushed); inside it, all transient UI
+-- state lives here. Global keys at the top level; per-view scratch in named
+-- sub-tables (library/stream/config). One bucket -- previously this was
+-- split into session.ui + session.viewLocal but the split was vestigial
+-- (both were transient, both reset on reload) and just doubled the mental
+-- overhead at every read site.
 local function NewSessionUIState()
     return {
+        -- Global session keys (apply across views).
         selectedGroupKey   = nil,
         selectedEntryIndex = nil,
         sendScope          = "selected",
         showSourceText     = false,
-    }
-end
-
--- Per-view scratch space (search text, scroll position, etc). Each view
--- gets its own subtable. Library tracks the user's currently-selected
--- library + card within library view (independent of detail-view selection).
-local function NewSessionViewLocal()
-    return {
+        -- Per-view scratch spaces. Library tracks the user's currently-
+        -- selected library + card within library view (independent of
+        -- detail-view selection). Stream tracks which library's history
+        -- the stream rail displays. Config is reserved for future use.
         library = {
-            selectedLibraryID = nil,    -- which library is shown in center
-            selectedSetID     = nil,    -- which card is shown in right (coords)
-            -- Find-state: search/filter/sort applied to the middle "Finder"
-            -- column. Pure session scratch -- not persisted across /reloads.
-            searchQuery  = "",                 -- editbox text (lowercased at filter time)
-            activeFilter = "all",              -- "all" | "ready" | "has_note" | "blocked"
-            sortOrder    = "recent",           -- "recent" | "alpha" | "size"
+            selectedLibraryID = nil,
+            selectedSetID     = nil,
+            searchQuery  = "",
+            activeFilter = "all",
+            sortOrder    = "recent",
         },
         stream  = {
-            -- Which library's cards the stream-history list shows. nil =
-            -- defaultLibraryID (matches the legacy behaviour).
-            libraryID = nil,
+            libraryID = nil,    -- nil = use defaultLibraryID
         },
         config  = {},
     }
@@ -100,9 +100,8 @@ end
 
 local function NewDefaultSession()
     return {
-        ui        = NewSessionUIState(),
-        viewLocal = NewSessionViewLocal(),
-        applyLog  = {},   -- moved out of account; rolling history is session-scoped
+        ui       = NewSessionUIState(),
+        applyLog = {},   -- rolling history, session-scoped
     }
 end
 
@@ -120,15 +119,7 @@ local function NewDefaultState()
         session = NewDefaultSession(),
         characters = {},
     }
-
-    state.config = state.account.config
-    state.ui = state.account.ui
     return state
-end
-
-local function ApplyRootAliases(state)
-    state.config = state.account.config
-    state.ui = state.account.ui
 end
 
 local function EnsureConfig(account)
@@ -165,9 +156,15 @@ end
 -- Session is rebuilt fresh on /reload via NewDefaultState, NOT here.
 local function EnsureSession(state)
     state.session = state.session or NewDefaultSession()
-    state.session.ui        = state.session.ui        or NewSessionUIState()
-    state.session.viewLocal = state.session.viewLocal or NewSessionViewLocal()
-    state.session.applyLog  = state.session.applyLog  or {}
+    state.session.ui       = state.session.ui       or NewSessionUIState()
+    state.session.applyLog = state.session.applyLog or {}
+    -- Ensure the per-view sub-tables exist (they live under session.ui now,
+    -- following the bucket merge). Pre-create with defaults so selectors
+    -- can read without nil-guarding every chain.
+    local defaults = NewSessionUIState()
+    state.session.ui.library = state.session.ui.library or defaults.library
+    state.session.ui.stream  = state.session.ui.stream  or defaults.stream
+    state.session.ui.config  = state.session.ui.config  or defaults.config
 end
 
 local function EnsureCache(state)
@@ -220,7 +217,73 @@ local function EnsureStateShape(state)
     EnsureCache(state)
     EnsureDefaultLibrary(state)
     EnsureSession(state)
-    ApplyRootAliases(state)
+end
+
+-- Normalise selection invariants after any reducer that touches set / group /
+-- entry / library selection. Selectors are the source of truth for "what's a
+-- valid group" / "what entries exist", so we call them here. Called at the
+-- END of relevant reducer branches; Refresh stays read-only.
+--
+-- Invariants enforced:
+--   * Detail-view selection (state.session.ui.*):
+--       - If account.ui.selectedSetID points at a missing/deleted set, clear
+--         selectedGroupKey + selectedEntryIndex.
+--       - Else selectedGroupKey must be a key of the current set's groups
+--         (or nil when zero groups) -> coerce via FirstGroupKey.
+--       - selectedEntryIndex must reference an entry in selectedGroupKey
+--         (or nil) -> coerce via FindEntryInGroup.
+--   * Library-view selection (state.session.ui.library.*):
+--       - selectedLibraryID must be a live library OR nil (nil = selectors
+--         fall back to defaultLibraryID, the canonical "no explicit pick").
+--       - selectedSetID must be a live (non-deleted) set OR nil. If the
+--         user deleted the card open in the Curator, this clears so the
+--         Curator panel doesn't render against a dead set.
+local function NormaliseSelection(state)
+    if not (state and state.session and state.session.ui) then return end
+    local ui = state.session.ui
+    local sets = state.account.sets or {}
+
+    -- Detail-view group/entry invariants (set determined by account.ui.selectedSetID).
+    local setID = state.account.ui and state.account.ui.selectedSetID
+    local set = setID and sets[setID] or nil
+    if (not set) or set.deletedAt then
+        ui.selectedGroupKey = nil
+        ui.selectedEntryIndex = nil
+    elseif VFN.Selectors and VFN.Selectors.BuildMapGroups then
+        local groups = VFN.Selectors.BuildMapGroups(set)
+        if not VFN.Selectors.FindGroupByKey(groups, ui.selectedGroupKey) then
+            ui.selectedGroupKey = VFN.Selectors.FirstGroupKey(groups)
+        end
+        local index = VFN.Selectors.FindEntryInGroup(set, ui.selectedGroupKey, ui.selectedEntryIndex)
+        ui.selectedEntryIndex = index
+    end
+
+    -- Library-view invariants. The library tab has its OWN selection pair
+    -- (independent of the detail view's account.ui.selectedSetID): which
+    -- library is shown in the index column, which set is shown in the
+    -- Curator. Both can become stale on delete; clear when they point at
+    -- non-live state. Selectors handle nil cleanly (selectedLibraryID falls
+    -- back to defaultLibraryID; selectedSetID = nil hides the curator).
+    local libUI = ui.library
+    if libUI then
+        if libUI.selectedLibraryID then
+            local libs = state.account.libraries or {}
+            local lib = libs[libUI.selectedLibraryID]
+            if not lib or lib.deletedAt then libUI.selectedLibraryID = nil end
+        end
+        if libUI.selectedSetID then
+            local librarySet = sets[libUI.selectedSetID]
+            if not librarySet or librarySet.deletedAt then
+                libUI.selectedSetID = nil
+                -- Edit-staging slots from the now-dead set must also clear so
+                -- selectors don't return stale staged text for whatever card
+                -- the user selects next.
+                libUI.editsDirty   = false
+                libUI.editingTitle = nil
+                libUI.editingNote  = nil
+            end
+        end
+    end
 end
 
 local function AddToList(list, value)
@@ -262,10 +325,11 @@ local function GenerateSetID(state, library)
 end
 
 -- TriggerStateChanged forward-declared here so reducers below can call it.
--- Real fan-out lives on the Store table (defined after VFN.Store exists);
--- this stub redirects to it.
+-- Real fan-out (_Notify) lives on VFN.Store, defined further down in this
+-- file. Reducers only run inside Dispatch -- by then VFN.Store._Notify is
+-- defined, so no guard is needed.
 local function TriggerStateChanged(action)
-    if VFN.Store and VFN.Store._Notify then VFN.Store:_Notify(action) end
+    VFN.Store:_Notify(action)
 end
 
 local function AddExternalRef(cache, ref, setID, entryID, itemID)
@@ -353,36 +417,59 @@ VFN.Store = {
 -- action name. Errors in one subscriber don't break the others (pcall).
 -- Subscribers receive (action) -- no payload, no diff hint. They re-read
 -- state from scratch and reconcile their widgets to it.
+--
+-- Notifications are DEFERRED via C_Timer.After(0) per spec section 7.2.
+-- Multiple dispatches in the same frame are batched: pending actions
+-- accumulate in self._pendingNotifications; the scheduled flush drains
+-- them on the NEXT frame, fanning each one out to every subscriber.
+-- This prevents the Roact 1.4.x re-entrant-flush corruption class (a
+-- subscriber that dispatches back into the store cannot perturb the
+-- in-progress notification loop).
+--
+-- In tests, wow_mock.lua's C_Timer.After fires synchronously by default,
+-- so subscriber side-effects remain observable immediately after dispatch.
+-- Tests that need to observe deferred batching can call MockTimerDeferred(true).
 function VFN.Store:Subscribe(fn)
     if type(fn) ~= "function" then return nil end
     self._subscribers[fn] = true
     return fn
 end
 
-function VFN.Store:Unsubscribe(fn)
-    if fn then self._subscribers[fn] = nil end
-end
-
 function VFN.Store:_Notify(action)
-    for fn in pairs(self._subscribers) do
-        local ok, err = pcall(fn, action)
-        if not ok then
-            local printer = _G and _G.print or function() end
-            printer("|cffff5555[VFN Store] subscriber error: " .. tostring(err) .. "|r")
+    self._pendingNotifications = self._pendingNotifications or {}
+    self._pendingNotifications[#self._pendingNotifications + 1] = action
+    if self._flushScheduled then return end
+    self._flushScheduled = true
+
+    local function flush()
+        local pending = self._pendingNotifications
+        self._pendingNotifications = nil
+        self._flushScheduled = false
+        if not pending then return end
+        -- Snapshot subscribers so re-entrant Subscribe/Unsubscribe calls
+        -- during dispatch don't perturb iteration.
+        local snapshot = {}
+        for fn in pairs(self._subscribers) do snapshot[#snapshot + 1] = fn end
+        for _, actionType in ipairs(pending) do
+            for _, fn in ipairs(snapshot) do
+                local ok, err = pcall(fn, actionType)
+                if not ok then
+                    local printer = _G and _G.print or function() end
+                    printer("|cffff5555[VFN Store] subscriber error: " .. tostring(err) .. "|r")
+                end
+            end
         end
+    end
+
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, flush)
+    else
+        flush()
     end
 end
 
 function VFN.Store:GetState()
     return self.state
-end
-
-function VFN.Store:EnsureDefaultLibrary()
-    EnsureDefaultLibrary(self.state)
-end
-
-function VFN.Store:EnsureCache()
-    EnsureCache(self.state)
 end
 
 function VFN.Store:RebuildIndexes()
@@ -475,46 +562,64 @@ function VFN.Store:Flush()
     self.saveTimer = nil
 end
 
--- Named mutators now funnel through Dispatch -- the reducer's elseif chain
--- is the single mutation surface. These wrappers exist so call-sites can
--- read `Store:CreateSet(set)` instead of `Store:Dispatch(ACTIONS.SET_CREATE, set)`,
--- and so a future caller can ignore the action constant entirely.
+-- Named mutators funnel through Dispatch -- the reducer's elseif chain is the
+-- single mutation surface. These wrappers let call-sites read
+-- `Store:CreateSet(set)` instead of building the dispatch table by hand.
 function VFN.Store:CreateSet(set)
-    return self:Dispatch(VFN.Constants.ACTIONS.SET_CREATE, set or {})
+    return self:Dispatch({ type = VFN.Constants.ACTIONS.SET_CREATE, payload = set or {} })
 end
 
 function VFN.Store:DeleteSet(setID)
-    local result = self:Dispatch(VFN.Constants.ACTIONS.SET_DELETE, { setID = setID })
+    local result = self:Dispatch({ type = VFN.Constants.ACTIONS.SET_DELETE, payload = { setID = setID } })
     return result and result.ok or false
 end
 
 function VFN.Store:OpenSet(setID)
-    local result = self:Dispatch(VFN.Constants.ACTIONS.SET_OPEN, { setID = setID })
+    local result = self:Dispatch({ type = VFN.Constants.ACTIONS.SET_OPEN, payload = { setID = setID } })
     return result and result.ok or false
 end
 
 function VFN.Store:CloseSet()
-    local result = self:Dispatch(VFN.Constants.ACTIONS.SET_CLOSE)
+    local result = self:Dispatch({ type = VFN.Constants.ACTIONS.SET_CLOSE })
     return result and result.ok or false
 end
 
-function VFN.Store:Dispatch(action, payload)
+-- Public Dispatch: a thin wrapper over _RawDispatch. Middleware.Apply REPLACES
+-- this method with the chain closure; until Apply runs, dispatches bypass the
+-- chain and call the reducer directly.
+function VFN.Store:Dispatch(action)
+    return self:_RawDispatch(action)
+end
+
+-- The Store's reducer entry point. Receives a single-table action of the
+-- shape `{ type = "ACTION_NAME", payload = { ... } }` -- the Rodux/Redux
+-- shape that the middleware chain depends on. Public `Dispatch` is a thin
+-- wrapper around this; the wrapper is what gets REPLACED by Middleware.Apply
+-- when the chain is installed (Init.lua OnInitialize), leaving _RawDispatch
+-- as the un-wrapped base case at the bottom of the chain.
+--
+-- Reducer is pure state mutation. SavedVariables dirty-marking is owned by
+-- PersistenceMiddleware via ACTION_META.persists -- NOT by the reducer.
+-- Test harnesses that bypass Middleware.Apply will leave VFN_DB untouched
+-- until an explicit Store:QueueSave() / Flush() call; tests don't assert
+-- VFN_DB shape so this is fine.
+function VFN.Store:_RawDispatch(action)
     EnsureStateShape(self.state)
 
-    if action == VFN.Constants.ACTIONS.CONFIG_SET then
+    local actionType = action and action.type
+    local payload    = action and action.payload
+
+    if actionType == VFN.Constants.ACTIONS.CONFIG_SET then
         payload = payload or {}
         if payload.key then
             self.state.account.config[payload.key] = payload.value
-            ApplyRootAliases(self.state)
-            self:QueueSave()
-            TriggerStateChanged(action)
+            TriggerStateChanged(actionType)
         end
-    elseif action == VFN.Constants.ACTIONS.HARD_RESET then
+    elseif actionType == VFN.Constants.ACTIONS.HARD_RESET then
         self.state = NewDefaultState()
         EnsureStateShape(self.state)
-        self:QueueSave()
-        TriggerStateChanged(action)
-    elseif action == VFN.Constants.ACTIONS.UI_SET_PERSISTENT then
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.UI_SET_PERSISTENT then
         -- account.ui write (persists across /reload). The caller picked the
         -- bucket -- no routing table, no key-allowlist lookup. Typos at the
         -- call site land in account.ui without warning, but they're typos
@@ -524,26 +629,59 @@ function VFN.Store:Dispatch(action, payload)
         if key == nil then return end
         if self.state.account.ui[key] ~= payload.value then
             self.state.account.ui[key] = payload.value
-            self:QueueSave()
-            TriggerStateChanged(action)
+            TriggerStateChanged(actionType)
         end
-    elseif action == VFN.Constants.ACTIONS.UI_SET_TRANSIENT then
+    elseif actionType == VFN.Constants.ACTIONS.UI_SET_TRANSIENT then
         -- session.ui write (cleared on /reload). No QueueSave -- the whole
         -- session bucket is rebuilt fresh at addon load.
+        --
+        -- payload.view optional: when present, writes into the named per-
+        -- view sub-table (session.ui[view][key]) instead of the top-level
+        -- session.ui[key]. Library / stream / config are the known views.
         payload = payload or {}
+        local view = payload.view
         local key = payload.key
         if key == nil then return end
-        if self.state.session.ui[key] ~= payload.value then
-            self.state.session.ui[key] = payload.value
-            TriggerStateChanged(action)
+        local bucket = self.state.session.ui
+        if view ~= nil then
+            bucket = bucket[view]
+            if not bucket then return end
         end
-    elseif action == VFN.Constants.ACTIONS.UI_TOGGLE_MAP then
+        if bucket[key] ~= payload.value then
+            bucket[key] = payload.value
+            -- Selection invariants: any write that touches set / group /
+            -- entry / library selection may invalidate downstream selection
+            -- state. Repair so callers don't have to.
+            if view == nil and (key == "selectedGroupKey" or key == "selectedEntryIndex") then
+                NormaliseSelection(self.state)
+            elseif view == "library" and (key == "selectedSetID" or key == "selectedLibraryID") then
+                NormaliseSelection(self.state)
+            end
+            TriggerStateChanged(actionType)
+        end
+    elseif actionType == VFN.Constants.ACTIONS.UI_TOGGLE_MAP then
         local map = self.state.account.ui.map or {}
         map.shown = (map.shown == false)
         self.state.account.ui.map = map
-        self:QueueSave()
-        TriggerStateChanged(action)
-    elseif action == VFN.Constants.ACTIONS.APPLY_LOG_APPEND then
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.SESSION_END then
+        -- Dispatched on PLAYER_LOGOUT (covers /reload and /quit alike).
+        -- Force the main window closed so the next login starts clean --
+        -- a re-opened addon window on login is unexpected behaviour.
+        self.state.account.ui.mainWindowShown = false
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.MAIN_WINDOW_TOGGLE then
+        -- Optional payload.value (explicit set: true | false) overrides the
+        -- flip, used by lifecycle restore on OnEnable. Bare dispatch with
+        -- no payload toggles.
+        local ui = self.state.account.ui
+        if payload and payload.value ~= nil then
+            ui.mainWindowShown = payload.value and true or false
+        else
+            ui.mainWindowShown = not (ui.mainWindowShown == true)
+        end
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.APPLY_LOG_APPEND then
         -- Apply log: bounded ring buffer of recent send / remove events.
         -- Lives in session.applyLog (transient -- fresh history each
         -- session). Drawer-side rendering reads it; Controller_Detail
@@ -560,24 +698,11 @@ function VFN.Store:Dispatch(action, payload)
             for i = MAX + 1, #log do log[i] = nil end
         end
         self.state.session.applyLog = log
-        TriggerStateChanged(action)
-    elseif action == VFN.Constants.ACTIONS.VIEWLOCAL_SET then
-        -- Per-view scratch space writes (e.g. library's selectedLibraryID /
-        -- selectedSetID). Path is { view, key } -- session.viewLocal[view][key].
-        payload = payload or {}
-        local view, key = payload.view, payload.key
-        if type(view) ~= "string" or type(key) ~= "string" then return end
-        local bucket = self.state.session.viewLocal[view]
-        if not bucket then
-            bucket = {}
-            self.state.session.viewLocal[view] = bucket
-        end
-        if bucket[key] ~= payload.value then
-            bucket[key] = payload.value
-            -- Session writes do NOT persist.
-            TriggerStateChanged(action)
-        end
-    elseif action == VFN.Constants.ACTIONS.LIBRARY_CREATE then
+        TriggerStateChanged(actionType)
+    -- (ACTIONS.VIEWLOCAL_SET retired in #11.2 -- the per-view writes it
+    --  used to handle now go through UI_SET_TRANSIENT with an optional
+    --  payload.view. See Mech.SetUITransientView for the modern call site.)
+    elseif actionType == VFN.Constants.ACTIONS.LIBRARY_CREATE then
         payload = payload or {}
         local name = type(payload.name) == "string" and payload.name:gsub("^%s+", ""):gsub("%s+$", "") or ""
         if name == "" then return nil end
@@ -600,10 +725,9 @@ function VFN.Store:Dispatch(action, payload)
             tags = {},
             display = { color = nil, icon = nil },
         }
-        self:QueueSave()
-        TriggerStateChanged(action)
+        TriggerStateChanged(actionType)
         return { libraryID = libID }
-    elseif action == VFN.Constants.ACTIONS.LIBRARY_DELETE then
+    elseif actionType == VFN.Constants.ACTIONS.LIBRARY_DELETE then
         payload = payload or {}
         local libID = payload.libraryID
         local lib = libID and self.state.account.libraries[libID] or nil
@@ -619,18 +743,17 @@ function VFN.Store:Dispatch(action, payload)
         end
         defaultLib.updatedAt = time()
         self.state.account.libraries[libID] = nil
-        self:QueueSave()
-        TriggerStateChanged(action)
-    elseif action == VFN.Constants.ACTIONS.LIBRARY_RENAME then
+        NormaliseSelection(self.state)  -- viewLocal.library.selectedLibraryID may have pointed at the deleted lib
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.LIBRARY_RENAME then
         payload = payload or {}
         local lib = payload.libraryID and self.state.account.libraries[payload.libraryID] or nil
         local name = type(payload.name) == "string" and payload.name:gsub("^%s+", ""):gsub("%s+$", "") or ""
         if not lib or name == "" then return end
         lib.name = name
         lib.updatedAt = time()
-        self:QueueSave()
-        TriggerStateChanged(action)
-    elseif action == VFN.Constants.ACTIONS.SET_CREATE then
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.SET_CREATE then
         -- Reducer body for Store:CreateSet (which dispatches to this case).
         -- Returns { setID = id } on success, { error = "..." } on rejection.
         local set = payload or {}
@@ -667,10 +790,9 @@ function VFN.Store:Dispatch(action, payload)
         library.updatedAt = time()
 
         self:RebuildIndexes()
-        self:QueueSave()
-        TriggerStateChanged(action)
+        TriggerStateChanged(actionType)
         return { setID = id }
-    elseif action == VFN.Constants.ACTIONS.SET_DELETE then
+    elseif actionType == VFN.Constants.ACTIONS.SET_DELETE then
         local setID = payload and payload.setID
         local set = setID and self.state.account.sets[setID] or nil
         if not set then return { ok = false } end
@@ -689,25 +811,25 @@ function VFN.Store:Dispatch(action, payload)
         end
 
         self:RebuildIndexes()
-        self:QueueSave()
-        TriggerStateChanged(action)
+        NormaliseSelection(self.state)
+        TriggerStateChanged(actionType)
         return { ok = true }
-    elseif action == VFN.Constants.ACTIONS.SET_OPEN then
+    elseif actionType == VFN.Constants.ACTIONS.SET_OPEN then
         local setID = payload and payload.setID
         local set = setID and self.state.account.sets[setID] or nil
         if not set or set.deletedAt then return { ok = false } end
 
         self.state.account.ui.selectedSetID = setID
         set.lastOpenedAt = time()
-        self:QueueSave()
-        TriggerStateChanged(action)
+        NormaliseSelection(self.state)
+        TriggerStateChanged(actionType)
         return { ok = true }
-    elseif action == VFN.Constants.ACTIONS.SET_CLOSE then
+    elseif actionType == VFN.Constants.ACTIONS.SET_CLOSE then
         self.state.account.ui.selectedSetID = nil
-        self:QueueSave()
-        TriggerStateChanged(action)
+        NormaliseSelection(self.state)
+        TriggerStateChanged(actionType)
         return { ok = true }
-    elseif action == VFN.Constants.ACTIONS.SET_UPDATE then
+    elseif actionType == VFN.Constants.ACTIONS.SET_UPDATE then
         -- Replace a set's editable triple (title / sourceText / note) AND
         -- the derived sourceLines + entries (post re-parse). The triple
         -- ALWAYS arrives as a complete object at payload.fields -- partial
@@ -726,9 +848,9 @@ function VFN.Store:Dispatch(action, payload)
         if type(payload.entries) == "table"     then set.entries     = payload.entries     end
         set.updatedAt = time()
         self:RebuildIndexes()  -- entries changed -> map/dedup indexes too
-        self:QueueSave()
-        TriggerStateChanged(action)
-    elseif action == VFN.Constants.ACTIONS.SET_MOVE_LIBRARY then
+        NormaliseSelection(self.state)  -- entries changed -> group/entry selection may be stale
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.SET_MOVE_LIBRARY then
         payload = payload or {}
         local setID = payload.setID
         local toID  = payload.toLibraryID
@@ -749,7 +871,24 @@ function VFN.Store:Dispatch(action, payload)
         toLib.updatedAt = time()
         set.libraryID = toID
         set.updatedAt = time()
-        self:QueueSave()
-        TriggerStateChanged(action)
+        TriggerStateChanged(actionType)
+    elseif actionType == VFN.Constants.ACTIONS.COMBAT_ENTER then
+        -- CombatMiddleware dispatches this on PLAYER_REGEN_DISABLED. Reducer
+        -- is the only mutation point for session.combat.inLockdown so the
+        -- field has a single source of truth (spec section 4.4 SSoT rule).
+        local combat = self.state.session.combat
+        if combat and combat.inLockdown ~= true then
+            combat.inLockdown = true
+            TriggerStateChanged(actionType)
+        end
+    elseif actionType == VFN.Constants.ACTIONS.COMBAT_EXIT then
+        -- CombatMiddleware dispatches this on PLAYER_REGEN_ENABLED. Reducer
+        -- flips the flag; the middleware itself then drains its queued-action
+        -- buffer via store:Dispatch (separate from this reducer cycle).
+        local combat = self.state.session.combat
+        if combat and combat.inLockdown ~= false then
+            combat.inLockdown = false
+            TriggerStateChanged(actionType)
+        end
     end
 end

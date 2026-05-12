@@ -30,7 +30,13 @@ local function groupRowFactory(template)
         Configure = function(row, ed)
             ed = ed or {}
             if not row._vfnLaidOut and row.CreateTexture then
-                local icon = row:CreateTexture(nil, "ARTWORK")
+                -- ARTWORK sublayer 5: above row chrome's watercolor (sublayer 0)
+                -- and gloss (sublayer 1) which are SetAllPoints and would
+                -- otherwise obscure the 16x16 icon. Same-layer draw order is
+                -- creation order; the chrome is created AFTER the icon (via
+                -- PaintRowChrome below), so the icon needs an explicit higher
+                -- sublayer to win.
+                local icon = row:CreateTexture(nil, "ARTWORK", nil, 5)
                 icon:SetSize(16, 16)
                 icon:SetPoint("LEFT", 6, 0)
                 if icon.SetAtlas then icon:SetAtlas("housing-map-deed") end
@@ -84,6 +90,7 @@ VFN.Rows:Register("groupRow", {
     font   = "body",
     height = 34,
     factory = groupRowFactory,
+    key    = function(spec, _ctx) return tostring(spec and spec.key or spec) end,  -- per-group identifier
 })
 
 -- Custom coord-row factory: numbered badge on the left + yellow coords +
@@ -164,6 +171,7 @@ VFN.Rows:Register("coordRow", {
     font   = "body",
     height = 34,
     factory = coordRowFactory,
+    key    = function(spec, _ctx) return tostring(spec and spec.index or "?") end,
 })
 
 VFN.Rows:Register("sourceLineRow", {
@@ -171,33 +179,22 @@ VFN.Rows:Register("sourceLineRow", {
     height = 34,
     deriveText = function(ed) return ed.text or "" end,
     -- no onClick: source lines are static
+    key    = function(spec, _ctx) return tostring(spec and spec.lineNumber or spec and spec.text or "?") end,
 })
 
--- State helpers (selected group / entry / scope) ---------------------------
-
-local function EnsureSelectedGroup(groups)
-    local ui = GetUI()
-    local found = VFN.Selectors.FindGroupByKey(groups, ui.selectedGroupKey)
-    if found then return found end
-    SetUITransient("selectedGroupKey", VFN.Selectors.FirstGroupKey(groups))
-    return groups and groups[1] or nil
-end
-
-local function EnsureSelectedEntry(set, key)
-    local ui = GetUI()
-    local index, entry = VFN.Selectors.FindEntryInGroup(set, key, ui.selectedEntryIndex)
-    if index ~= ui.selectedEntryIndex then
-        SetUITransient("selectedEntryIndex", index)
-    end
-    return index, entry
-end
+-- State helpers ---------------------------------------------------------------
+--
+-- (EnsureSelectedGroup / EnsureSelectedEntry retired in #11.1 -- the Store's
+-- reducer enforces those invariants now via NormaliseSelection. By the time
+-- Refresh runs, state.session.ui.selectedGroupKey + selectedEntryIndex are
+-- guaranteed to be either nil or valid for the current selectedSetID.)
 
 local function GetEntriesForScope(set)
     if not set then return {} end
     local scope = GetUI().sendScope
     local key = GetUI().selectedGroupKey
     if scope == "selected" then
-        local _, entry = EnsureSelectedEntry(set, key)
+        local _, entry = VFN.Selectors.FindEntryInGroup(set, key, GetUI().selectedEntryIndex)
         if VFN.Selectors.IsSendableEntry(entry) then return { entry } end
         return {}
     end
@@ -215,9 +212,7 @@ end
 -- still flashes the latest message; the log keeps the audit trail.
 local function LogAndStatus(rootFrame, text)
     SetActionStatus(rootFrame, text)
-    if VFN.Store and VFN.Store.Dispatch then
-        CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.APPLY_LOG_APPEND, { line = text })
-    end
+    CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.APPLY_LOG_APPEND, { line = text })
 end
 
 local function FormatWaypointAction(action, result)
@@ -295,36 +290,12 @@ function DetailController:Wire(rootFrame)
     end)
 end
 
-local function setVis(widget, shown)
-    if not widget then return end
-    if shown then if widget.Show then widget:Show() end
-    else if widget.Hide then widget:Hide() end end
-end
-
--- Refresh handles only the imperative side effects that bindings can't:
---   1. EnsureSelectedGroup / EnsureSelectedEntry -- self-healing writes
---      that pick a default selection when the previous one is stale. These
---      mutate state, so they can't live in a (pure) selector.
---   2. coordinateList / sourceLineList show/hide -- bindings handle items,
---      but the visibility toggle is imperative (it's a per-widget Hide/Show
---      call, not a value push).
-function DetailController:Refresh(rootFrame, ctx)
-    ctx = ctx or {}
-    local hasSelection = ctx.hasSelection == true
-    local _, set = GetSelectedSet()
-    local ui = GetUI()
-
-    if not hasSelection then return end
-
-    local groups = VFN.Selectors.BuildMapGroups(set)
-    EnsureSelectedGroup(groups)
-    local key = GetUI().selectedGroupKey
-    EnsureSelectedEntry(set, key)
-
-    local coordList  = W(rootFrame, "mainPanel.coordinateList")
-    local sourceList = W(rootFrame, "mainPanel.sourceLineList")
-    setVis(coordList,  not ui.showSourceText)
-    setVis(sourceList, ui.showSourceText)
+-- Refresh is empty now: coordinateList / sourceLineList visibility is
+-- declarative on the widget specs (`visible = "detail.coordListVisible"`
+-- / "detail.sourceListVisible"), resolved by Layout:Compute per spec
+-- section 6. No imperative Show/Hide here. Keeping the function so the
+-- Controllers:RefreshAll iteration doesn't need to check for nil.
+function DetailController:Refresh(_rootFrame, _ctx)
 end
 
 VFN.Controllers:Register("detail", DetailController)

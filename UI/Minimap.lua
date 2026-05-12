@@ -21,8 +21,7 @@ local function EnsureMinimapDB()
     VFN_DB.minimap.minimapPos = VFN_DB.minimap.minimapPos or VFN.Constants.MINIMAP_DEFAULT_POSITION
     VFN_DB.minimap.lock = VFN_DB.minimap.lock or false
     if VFN_DB.minimap.hide == nil then
-        local config = VFN.Store and VFN.Store.GetState and VFN.Store:GetState().config or nil
-        VFN_DB.minimap.hide = config and config.showMinimapButton == false or false
+        VFN_DB.minimap.hide = VFN.Store:GetState().account.config.showMinimapButton == false
     end
     return VFN_DB.minimap
 end
@@ -71,9 +70,7 @@ function VFN.Minimap:Initialize()
 
     self:RegisterCompartment()
 
-    if VFN.Store and VFN.Store.Subscribe then
-        VFN.Store:Subscribe(function() Minimap:Refresh() end)
-    end
+    VFN.Store:Subscribe(function() Minimap:Refresh() end)
 end
 
 function VFN.Minimap:Refresh()
@@ -84,8 +81,7 @@ function VFN.Minimap:UpdateVisibility()
     if not dbIcon or not dbIcon.IsRegistered or not dbIcon:IsRegistered(ADDON_KEY) then return end
 
     local minimapDB = EnsureMinimapDB()
-    local config = VFN.Store and VFN.Store.GetState and VFN.Store:GetState().config or nil
-    local show = config and config.showMinimapButton
+    local show = VFN.Store:GetState().account.config.showMinimapButton
     if show == nil then show = not minimapDB.hide end
 
     minimapDB.hide = not show

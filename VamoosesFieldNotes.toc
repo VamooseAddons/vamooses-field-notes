@@ -17,6 +17,23 @@ Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 Core/SchemeConstants.lua
 Core/Constants.lua
 Core/L.lua
+
+# v0.6 foundation engines (UI_WIDGET_TAXONOMY.md). Order matters: each
+# subsequent engine may consume earlier ones at Boot time.
+Core/Modules.lua
+Core/TableUtils.lua
+Core/Bindings.lua
+Core/Memo.lua
+Core/BlizzardEvents.lua
+Core/Middleware.lua
+Core/Environment.lua
+Core/WidgetTypes.lua
+Core/TooltipEngine.lua
+Core/Audio.lua
+Core/NotificationCenter.lua
+Core/FlowRunner.lua
+
+# Existing infrastructure (Phase 3 will migrate onto the engines above).
 Core/Store.lua
 Core/Init.lua
 
@@ -37,7 +54,6 @@ Modules/VFN_LibrarySeeder.lua
 # UI
 UI/Theme.lua
 UI/LayoutConfig.lua
-UI/LayoutRegistry.lua
 UI/Components.lua
 UI/Panels.lua
 UI/Layout.lua

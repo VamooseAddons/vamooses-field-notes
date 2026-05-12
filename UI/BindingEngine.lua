@@ -11,10 +11,10 @@
 --   binding = { value = "x", label = "static:Y" }   -- multi-field, kind-specific names
 --
 -- Kind-specific field names (the dispatcher routes to widget methods):
---   label / labelDim / labelStatus     -> { text }
---   button                              -> { text, enabled }
+--   label / fieldLabel                  -> { text }   (variant via spec.variant)
+--   button                              -> { text, enabled, active }
 --   editbox                             -> { text }
---   chip                                -> { text, variant }
+--   chip                                -> { text, status }
 --   statCard                            -> { value, label }
 --   scrollbox                           -> { items }
 --
@@ -32,81 +32,10 @@ VFN.BindingEngine = VFN.BindingEngine or {}
 
 local Engine = VFN.BindingEngine
 
--- Default field per kind. A scalar binding ("library.title") maps to this
--- field; a table binding ({ value = ..., label = ... }) specifies fields
--- explicitly. Widgets whose kind isn't in this table CANNOT use a scalar
--- binding -- they must use the table form.
-local KIND_DEFAULT_FIELD = {
-    label       = "text",
-    labelDim    = "text",
-    labelStatus = "text",
-    editbox     = "text",
-    scrollbox   = "items",
-}
-
--- Kind-specific dispatchers. Each receives (widget, values) where `values`
--- is a table keyed by binding field names. The dispatcher pushes the values
--- to the widget via its concrete API. Missing fields are no-ops (selector
--- returned nil OR field not declared in the binding).
-Engine.Dispatchers = {}
-
-function Engine.Dispatchers.label(widget, values)
-    if values.text ~= nil and widget.SetText then widget:SetText(tostring(values.text)) end
-end
-Engine.Dispatchers.labelDim    = Engine.Dispatchers.label
-Engine.Dispatchers.labelStatus = Engine.Dispatchers.label
-Engine.Dispatchers.fieldLabel  = Engine.Dispatchers.label
-
-function Engine.Dispatchers.button(widget, values)
-    if values.text ~= nil then
-        if widget.RefreshIntrinsicWidth then
-            widget:SetText(tostring(values.text))
-            widget:RefreshIntrinsicWidth()
-        elseif widget.SetText then
-            widget:SetText(tostring(values.text))
-        end
-    end
-    if values.enabled ~= nil and widget.SetEnabled then
-        widget:SetEnabled(values.enabled and true or false)
-    end
-    if values.active ~= nil and widget.SetActive then
-        widget:SetActive(values.active and true or false)
-    end
-end
-
--- (Legacy kind aliases removed in #10.6. All button shapes -- text, atlas,
---  toggle, close -- ship under one `kind = "button"` with options.atlas /
---  options.activeAtlas / options.close picking the internal shape.)
-
-function Engine.Dispatchers.editbox(widget, values)
-    if values.text == nil or not widget.SetText then return end
-    -- Skip the SetText if the current widget text already matches the desired
-    -- value -- prevents cursor resets and OnTextChanged loops when the user
-    -- is mid-typing and a state notify fires.
-    local current = widget.GetText and widget:GetText() or nil
-    if current ~= tostring(values.text) then
-        widget:SetText(tostring(values.text))
-        if widget._vfnPlaceholderRefresh then widget._vfnPlaceholderRefresh() end
-    end
-end
-
-function Engine.Dispatchers.chip(widget, values)
-    if values.text ~= nil and widget.SetChipText then widget:SetChipText(tostring(values.text)) end
-    -- Chip's data-driven category is `status` (ready / blocked / has_note /
-    -- source / default). Different concept from button's design-time variant.
-    if values.status ~= nil and widget.SetStatus then widget:SetStatus(values.status) end
-end
-
-function Engine.Dispatchers.statCard(widget, values)
-    if values.value ~= nil and widget.SetValue then widget:SetValue(tostring(values.value)) end
-    if values.label ~= nil and widget.SetLabel then widget:SetLabel(tostring(values.label)) end
-end
-
-function Engine.Dispatchers.scrollbox(widget, values)
-    if values.items ~= nil and widget.SetItems then
-        widget:SetItems(values.items, true)
-    end
-end
+-- Kind-specific dispatchers + default scalar-binding fields now live on
+-- the WidgetType records themselves (VFN.WidgetTypes -> kind.dispatch).
+-- See UI/Components.lua for the registrations; see Core/WidgetTypes.lua
+-- for the contract (spec section 3 -- dispatch = { fields, push }).
 
 -- ===== Resolution ==========================================================
 
@@ -118,10 +47,12 @@ local function resolve(spec, state, ctx)
 end
 
 -- Normalise a binding into { fieldName = selectorSpec, ... }. Scalar form
--- ("foo.bar") maps to the kind's default field; table form is passed through.
-local function normaliseBinding(binding, kind)
+-- ("foo.bar") maps to the kind's default field (dispatch.fields[1]); table
+-- form is passed through.
+local function normaliseBinding(binding, kind, kindDef)
     if type(binding) == "string" then
-        local field = KIND_DEFAULT_FIELD[kind]
+        local dispatch = kindDef and kindDef.dispatch or nil
+        local field = dispatch and dispatch.fields and dispatch.fields[1] or nil
         if not field then
             error(string.format(
                 "binding: kind %q does not accept scalar binding %q -- use the table form",
@@ -144,12 +75,13 @@ function Engine:Build(rootFrame, config)
         local widget = rootFrame.widgets[id]
         if widget and spec.binding then
             local kind = spec.kind
-            local dispatcher = self.Dispatchers[kind]
+            local kindDef = VFN.WidgetTypes:TryGet(kind)
+            local dispatcher = kindDef and kindDef.dispatch and kindDef.dispatch.push or nil
             if not dispatcher then
-                error(string.format("binding: kind %q has no dispatcher (widget %q)",
+                error(string.format("binding: kind %q has no dispatch (widget %q)",
                     tostring(kind), tostring(id)), 2)
             end
-            widget._vfnBinding    = normaliseBinding(spec.binding, kind)
+            widget._vfnBinding    = normaliseBinding(spec.binding, kind, kindDef)
             widget._vfnDispatcher = dispatcher
             widget._vfnBound      = true
         end

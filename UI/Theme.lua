@@ -9,16 +9,26 @@
 --   :GetFont(role)          "heading" -> Font object (real FontObject)
 --   :GetMetric(path)        "spacing.md" -> number
 --
--- Two skin APIs:
---   :Register(widget, kind)              legacy shim (Frame|Button|Text|TextDim)
---   :RegisterVariant(widget, kind, var)  apply a variant overlay (danger/primary)
+-- Three skin APIs:
+--   :Register(widget, kind, state?)      Register a widget with its skinner +
+--                                        optional initial state. Cached in a
+--                                        weak-table so Reload repaints all.
+--   :Apply(widget, kindOrNil)            Re-apply the skinner now.
+--   :SetState(widget, updates)           Merge updates into stored state and
+--                                        re-apply (universal runtime flag mutator).
 --
 -- Future re-skin: swap VFN_SchemeConstants.ColorblindSafe for another scheme,
 -- call Theme:Reload(), every registered widget repaints. No surface code change.
 
 VFN = VFN or {}
 VFN.Theme = {
-    registry = setmetatable({}, { __mode = "k" }),
+    -- Weak-keyed widget registry: GC of a widget releases its theme entry.
+    registry    = setmetatable({}, { __mode = "k" }),
+    -- Weak-keyed per-widget state cache (selected/active/etc). Initialised
+    -- alongside the registry so tests + introspection see a real table from
+    -- frame zero (audit finding #27 -- previously lazy-created on first
+    -- stateful Register call).
+    states      = setmetatable({}, { __mode = "k" }),
     fontObjects = {},  -- role name -> FontObject (created at Initialize)
 }
 
@@ -110,8 +120,8 @@ function VFN.Theme:LoadScheme(schemeOrName)
     self:ApplyAll()
 end
 
--- :GetColor("text") returns legacy top-level color (back-compat).
--- :GetColor("button.primary.bg.hover") returns nested V2 path.
+-- :GetColor("button.primary.bg.hover") resolves a dotted path against the
+-- active scheme. Returns nil for missing paths (callers nil-guard).
 function VFN.Theme:GetColor(path)
     local scheme = self:GetScheme()
     if not scheme then return nil end
@@ -174,9 +184,7 @@ VFN.Theme.Skinners = {
 
     -- Button: combines design-time variant (immutable, stashed on the widget
     -- at construction) with runtime state.active (mutable, from bindings via
-    -- SetActive / SetState). One paint pass reads both. There is no separate
-    -- variant-overlay step for buttons anymore -- the Theme.Variants table
-    -- still exists for other widget kinds, but Button bakes its variant once.
+    -- SetActive / SetState). One paint pass reads both.
     --
     -- State shape: { active = bool }. Active wins paint -- the button reads
     -- as the "selected/on" treatment regardless of variant family. Variants:
@@ -350,9 +358,7 @@ VFN.Theme.Skinners = {
     -- on it; this skinner reads status and paints both.
     StatusChip = function(chip, _scheme, state)
         if not (chip and chip._vfnChipBg and chip._vfnChipText) then return end
-        -- Back-compat: accept either status (new name) or variant (legacy)
-        -- so unmigrated call sites keep working while we sweep them.
-        local status = (state and (state.status or state.variant)) or "ready"
+        local status = (state and state.status) or "ready"
         local roleColor = {
             ready    = VFN.Theme:GetColor("semantic.success"),
             blocked  = VFN.Theme:GetColor("semantic.error"),
@@ -464,7 +470,7 @@ function VFN.Theme:Register(widget, widgetType, state)
     if not widget or not widgetType then return false end
     self.registry[widget] = widgetType
     if state ~= nil then
-        self.states = self.states or setmetatable({}, { __mode = "k" })
+        -- states is initialised at Theme construction; left no-op here for safety.
         self.states[widget] = state
     end
     local skin = self.Skinners and self.Skinners[widgetType]
@@ -481,6 +487,21 @@ function VFN.Theme:Apply(widget, widgetType)
     if not skin then return false end
     skin(widget, self:GetScheme(), self.states and self.states[widget])
     return true
+end
+
+-- Register a widget by its WidgetType kind name -- the spec section 5
+-- "engines as views over WidgetTypes" pattern. Resolves the kind's `skin`
+-- field once and forwards to Theme:Register. Use this from row factories
+-- and other direct callers that build widgets outside Layout's buildKind
+-- (Layout itself uses the same path). Errors loudly if the kind is
+-- unknown or doesn't declare a skin -- the validator already caught any
+-- legitimate kind without a paint role.
+function VFN.Theme:RegisterKind(widget, kindName, state)
+    local kindDef = VFN.WidgetTypes:Get(kindName)  -- loud-error on unknown
+    if not kindDef.skin then
+        error(("VFN.Theme:RegisterKind: kind %q has no `skin` declaration"):format(kindName), 2)
+    end
+    return self:Register(widget, kindDef.skin, state)
 end
 
 function VFN.Theme:ApplyAll()
@@ -504,7 +525,7 @@ function VFN.Theme:SetState(widget, updates)
     if not widget then return end
     local widgetType = self.registry[widget]
     if not widgetType then return end
-    self.states = self.states or setmetatable({}, { __mode = "k" })
+    -- states is initialised at Theme construction; left no-op here for safety.
     local current = self.states[widget] or {}
     if type(updates) == "table" then
         for k, v in pairs(updates) do current[k] = v end
@@ -513,69 +534,3 @@ function VFN.Theme:SetState(widget, updates)
     self:Apply(widget, widgetType)
 end
 
--- Variant skinning: apply a base skin then a variant overlay. Variants live
--- under VFN.Theme.Variants keyed by name. Each variant function receives
--- (widget, scheme).
-VFN.Theme.Variants = {
-    primary = function(widget, _scheme)
-        local bg = VFN.Theme:GetColor("button.primary.bg.normal")
-        local border = VFN.Theme:GetColor("button.primary.border.normal")
-        local text = VFN.Theme:GetColor("button.primary.text.normal")
-        if bg and widget.SetBackdropColor then widget:SetBackdropColor(bg.r, bg.g, bg.b, bg.a or 1) end
-        if border and widget.SetBackdropBorderColor then widget:SetBackdropBorderColor(border.r, border.g, border.b, border.a or 1) end
-        if text and widget.SetTextColor then widget:SetTextColor(text.r, text.g, text.b, text.a or 1) end
-    end,
-    danger = function(widget, _scheme)
-        local bg = VFN.Theme:GetColor("button.danger.bg.normal")
-        local border = VFN.Theme:GetColor("button.danger.border.normal")
-        local text = VFN.Theme:GetColor("button.danger.text.normal")
-        if bg and widget.SetBackdropColor then widget:SetBackdropColor(bg.r, bg.g, bg.b, bg.a or 1) end
-        if border and widget.SetBackdropBorderColor then widget:SetBackdropBorderColor(border.r, border.g, border.b, border.a or 1) end
-        if text and widget.SetTextColor then widget:SetTextColor(text.r, text.g, text.b, text.a or 1) end
-    end,
-    ghost = function(widget, _scheme)
-        local bg = VFN.Theme:GetColor("button.ghost.bg.normal")
-        local border = VFN.Theme:GetColor("button.ghost.border.normal")
-        local text = VFN.Theme:GetColor("button.ghost.text.normal")
-        if bg and widget.SetBackdropColor then widget:SetBackdropColor(bg.r, bg.g, bg.b, bg.a or 1) end
-        if border and widget.SetBackdropBorderColor then widget:SetBackdropBorderColor(border.r, border.g, border.b, border.a or 1) end
-        if text and widget.SetTextColor then widget:SetTextColor(text.r, text.g, text.b, text.a or 1) end
-    end,
-    -- Atlas-rendered variant: replaces backdrop with Blizzard's tertiary
-    -- button atlas family. Clears backdrop so the atlas paints clean.
-    tertiary = function(widget, _scheme)
-        local v = VFN.Theme:GetScheme().button and VFN.Theme:GetScheme().button.tertiary
-        if not (v and v.atlas) then return end
-        local atlas = v.atlas
-        if widget.SetNormalAtlas    then widget:SetNormalAtlas(atlas.normal) end
-        if widget.SetHighlightAtlas then widget:SetHighlightAtlas(atlas.hover) end
-        if widget.SetPushedAtlas    then widget:SetPushedAtlas(atlas.pressed) end
-        if widget.SetDisabledAtlas  then widget:SetDisabledAtlas(atlas.disabled) end
-        -- Clear backdrop so atlas shows clean (would otherwise stack underneath).
-        if widget.SetBackdrop then widget:SetBackdrop(nil) end
-        local text = v.text and v.text.normal
-        if text and widget.SetTextColor then widget:SetTextColor(text.r, text.g, text.b, text.a or 1) end
-    end,
-}
-
-function VFN.Theme:RegisterVariant(widget, widgetType, variant)
-    if not widget or not variant then return false end
-    self:Register(widget, widgetType)
-    local apply = self.Variants and self.Variants[variant]
-    if apply then apply(widget, self:GetVariant(variant)) end
-    widget.themeVariant = variant
-    return true
-end
-
--- Resolve a scheme by variant name. Currently one scheme; reserved entry
--- point for compact density / alt palettes.
-function VFN.Theme:GetVariant(_name)
-    return self:GetScheme()
-end
-
--- :Reload() -- swap scheme, rebuild FontObjects, repaint every registered
--- widget. Future re-skin entry point.
-function VFN.Theme:Reload()
-    self:Initialize()
-    self:ApplyAll()
-end

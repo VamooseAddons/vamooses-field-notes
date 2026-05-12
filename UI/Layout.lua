@@ -2,7 +2,7 @@
 --
 -- Pure layout engine. Reads VFN.LayoutConfig + a ctx state table, produces a
 -- flat placement map keyed by panel/section/widget id. Also builds the frame
--- tree by walking the same spec data via the LayoutRegistry.
+-- tree by walking the same spec data via VFN.WidgetTypes.
 --
 -- Concepts (in order of containment):
 --   window           outer frame; rendered in modes (collapsed | expanded)
@@ -10,7 +10,7 @@
 --   slot             named region inside a panel: "header" | "body" | "footer"
 --   section          virtual layout box. Stacks (vertical | horizontal | fill)
 --                    its children. May contain other sections or widgets.
---   widget           leaf node. kind names a factory in VFN.LayoutRegistry.
+--   widget           leaf node. kind names a registered WidgetType (VFN.WidgetTypes).
 --
 -- Routing: a section / widget declares
 --     in   = "<parentPanelOrSectionId>"
@@ -526,6 +526,31 @@ function Layout:Compute(config, ctx)
         end
     end
 
+    -- Declarative visibility per spec section 6: any widget with spec.visible
+    -- resolving falsey is dropped from placements -- Layout:Apply then calls
+    -- SetVisible(false) and the widget is hidden. Selector-string form
+    -- ("foo.bar") routes through VFN.Selectors with the state from ctx;
+    -- bool form is taken literally; nil defaults to visible.
+    local state = ctx.state
+    for widgetId, widgetSpec in pairs(config.widgets or {}) do
+        local v = widgetSpec.visible
+        if v ~= nil then
+            local resolved
+            if type(v) == "boolean" then
+                resolved = v
+            elseif type(v) == "string" and state and VFN.Selectors then
+                resolved = VFN.Selectors:Call(v, state, ctx)
+            elseif type(v) == "function" then
+                resolved = v(state, ctx)
+            else
+                resolved = true  -- unknown form; default visible (loud-fail at validator level instead)
+            end
+            if resolved == false then
+                placements[widgetId] = nil
+            end
+        end
+    end
+
     return placements
 end
 
@@ -592,7 +617,7 @@ function Layout:Apply(rootFrame, placements)
             -- Deferred skinner application -- runs ONCE per slot chrome, the
             -- first time the frame has a real rect. See BuildAll's
             -- chrome._pendingSkin assignment for why.
-            if chromeFrame._pendingSkin and VFN.Theme and VFN.Theme.Register then
+            if chromeFrame._pendingSkin then
                 VFN.Theme:Register(chromeFrame, chromeFrame._pendingSkin)
                 chromeFrame._pendingSkin = nil
             end
@@ -652,13 +677,34 @@ function Layout:BuildAll(rootFrame, config)
     rootFrame.widgets = rootFrame.widgets or {}
     rootFrame.sections = rootFrame.sections or {}
 
-    local Registry = VFN.LayoutRegistry
-    if not Registry or not Registry.Build then return end
+    -- Helper: build a widget by looking up its WidgetType and calling .build.
+    -- Returns nil if the kind isn't registered or has no build fn.
+    --
+    -- Spec section 5: engines are views over the WidgetTypes registry. After
+    -- build, this helper consults the kind's `skin` field (a string role name
+    -- per spec section 22) and registers the widget with the Theme engine.
+    -- Kinds that need a non-default initial Skinner state (chip's `status`)
+    -- declare an `initialState(spec)` function on the WidgetType; the result
+    -- is passed through Theme:Register so the role + state land together.
+    -- Build callbacks NEVER call Theme:Register on the kind's root widget --
+    -- one source of truth for paint role assignment.
+    local function buildKind(kind, parent, spec)
+        local kindDef = VFN.WidgetTypes:Get(kind)  -- errors loudly if missing
+        local widget = kindDef.build(parent, spec)
+        if not widget then return nil end
+        widget._vfnKind = kind  -- engine introspection (spec section 5)
+        if kindDef.skin then
+            local state = nil
+            if kindDef.initialState then state = kindDef.initialState(spec) end
+            VFN.Theme:Register(widget, kindDef.skin, state)
+        end
+        return widget
+    end
 
     for panelId, panelSpec in pairs(config.panels or {}) do
         -- defaultEnabled = false skips construction entirely (A/B flags hook).
         if panelSpec.defaultEnabled ~= false and not rootFrame.panels[panelId] then
-            local panel = Registry:Build(panelSpec.kind or "panel", rootFrame, panelSpec)
+            local panel = buildKind(panelSpec.kind or "panel", rootFrame, panelSpec)
             if panel then
                 panel.id = panelId
                 rootFrame.panels[panelId] = panel
@@ -670,6 +716,12 @@ function Layout:BuildAll(rootFrame, config)
     -- The frame parents to the enclosing panel and becomes the parent for any
     -- widgets inside the section. Coords for those widgets become section-
     -- relative (handled in layoutContainer).
+    --
+    -- These CreateFrame calls (here and in the panel-slot chrome loop below)
+    -- are engine-internal scaffolding -- NOT widget instances. Spec section 22
+    -- closes the widget TAXONOMY but does not restrict the Layout engine from
+    -- creating containers/scaffolding that back sections + slots. Widgets
+    -- still come exclusively from WidgetTypes:Get(kind).build callbacks.
     --
     -- Theme tinting: Blizzard chrome templates ship with their own bg textures
     -- (brown/wood for older templates, slate for modern ones). We tint the
@@ -707,9 +759,7 @@ function Layout:BuildAll(rootFrame, config)
                         local tint = sectionFrame:CreateTexture(nil, "BACKGROUND", nil, 1)
                         if tint then
                             if tint.SetAllPoints then tint:SetAllPoints() end
-                            if VFN.Theme and VFN.Theme.Register then
-                                VFN.Theme:Register(tint, "SectionBgTint", { token = bgToken })
-                            end
+                            VFN.Theme:Register(tint, "SectionBgTint", { token = bgToken })
                             sectionFrame._vfnBgTint = tint
                         end
                     end
@@ -765,13 +815,10 @@ function Layout:BuildAll(rootFrame, config)
             else
                 parent = (containerId and rootFrame.panels[containerId]) or rootFrame
             end
-            local widget = Registry:Build(widgetSpec.kind, parent, widgetSpec)
+            local widget = buildKind(widgetSpec.kind, parent, widgetSpec)
             if widget then
                 widget.id = widgetId
                 rootFrame.widgets[widgetId] = widget
-                if widgetSpec.themeOverride and VFN.Theme and VFN.Theme.RegisterVariant then
-                    VFN.Theme:RegisterVariant(widget, widgetSpec.kind, widgetSpec.themeOverride)
-                end
             end
         end
     end
@@ -782,9 +829,11 @@ end
 function Layout:Validate(config)
     config = config or VFN.LayoutConfig or {}
     local errors = {}
-    local Registry = VFN.LayoutRegistry
 
     local function err(msg) errors[#errors + 1] = msg end
+    local function hasKind(kind)
+        return VFN.WidgetTypes:TryGet(kind) ~= nil
+    end
 
     -- Validate window shape: missing height / mode / mode.width would silently
     -- become 0 at runtime without these checks (now that we removed defensive
@@ -862,8 +911,8 @@ function Layout:Validate(config)
 
     -- Validate panels.
     for id, spec in pairs(config.panels or {}) do
-        if spec.kind and Registry and Registry.Get and not Registry:Get(spec.kind) then
-            err(("panel %q: kind %q has no factory"):format(id, spec.kind))
+        if spec.kind and not hasKind(spec.kind) then
+            err(("panel %q: kind %q is not a registered WidgetType"):format(id, spec.kind))
         end
         for view, cellName in pairs(spec.cell or {}) do
             local viewSpec = (config.window and config.window.views or {})[view]
@@ -898,17 +947,30 @@ function Layout:Validate(config)
 
     -- Kinds whose construction requires a `font` field on the spec.
     local TEXT_BEARING_KINDS = {
-        label = true, labelDim = true, labelStatus = true,
+        label = true,                         -- + tags ("dim"/"status") drives paint role
         button = true, editbox = true,
-        chip = true,  -- chip has a label
+        chip = true,                          -- chip has a label
     }
+    -- Per-instance font requirement: text-bearing kinds may declare a
+    -- `requiresFont(spec) -> bool` predicate on their WidgetType to
+    -- suppress the font requirement for specific spec shapes (icon-only
+    -- button variants are the canonical case). Spec section 5: engines
+    -- query the registry, never peek at spec.options directly.
+    local function specRequiresFont(spec)
+        if not TEXT_BEARING_KINDS[spec.kind] then return false end
+        local kindDef = VFN.WidgetTypes:TryGet(spec.kind)
+        if kindDef and kindDef.requiresFont then
+            return kindDef.requiresFont(spec) == true
+        end
+        return true
+    end
 
     -- Validate widgets.
     for id, spec in pairs(config.widgets or {}) do
         if not spec.kind then
             err(("widget %q: missing `kind` field"):format(id))
-        elseif Registry and Registry.Get and not Registry:Get(spec.kind) then
-            err(("widget %q: kind %q has no factory"):format(id, spec.kind))
+        elseif not hasKind(spec.kind) then
+            err(("widget %q: kind %q is not a registered WidgetType"):format(id, spec.kind))
         end
         local parent = spec["in"]
         if not parent then
@@ -925,7 +987,7 @@ function Layout:Validate(config)
         -- Text-bearing widgets must declare a font role. Theme:GetFont(role)
         -- resolves it; missing -> default Blizzard font (and a typo would be
         -- silent). Validation forces explicit declaration.
-        if spec.kind and TEXT_BEARING_KINDS[spec.kind] and not spec.font then
+        if spec.kind and specRequiresFont(spec) and not spec.font then
             err(("widget %q: kind %q is text-bearing and requires a `font` role"):format(id, spec.kind))
         end
         if parent and isStackedContainer(parent, spec.slot) and spec.order == nil then

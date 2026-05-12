@@ -417,6 +417,3 @@ function VFN.CoordResolver:Resolve(parsed, opts)
     return out
 end
 
-function VFN.CoordResolver:ResolveCandidates(parsed, opts)
-    return self:Resolve(parsed, opts)
-end

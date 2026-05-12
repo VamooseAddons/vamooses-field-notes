@@ -3,15 +3,16 @@
 -- Unified row registry for scrollbox-style lists. ONE place to define a row;
 -- one shape that covers both "simple text row" and "custom multi-line row."
 --
--- Replaces the previous split:
---   - LayoutConfig.rows[name] = { font, height }       (shape data, removed)
---   - VFN.RowBehaviours[name] = { factory|deriveText } (behaviour, this file)
---
 -- Each row definition:
 --   font   = "body" | "subheading" | ...      (Theme font role; REQUIRED)
 --   height = number                            (row pixel height; REQUIRED)
 --   spacing = number                           (override scrollbox row spacing;
 --                                               optional, defaults to spec.spacing)
+--   key    = function(spec, ctx) -> string    (stable per-row identity;
+--                                               REQUIRED per spec section 10;
+--                                               `spec` is the row's elementData,
+--                                               `ctx` is the parent scrollbox
+--                                               context table -- nil for now)
 --
 -- Plus EXACTLY ONE of:
 --   factory(template) -> { Configure(row, ed), Reset(row) }
@@ -24,13 +25,14 @@
 --
 -- Selection state is conveyed via CH.UI.PaintRowChrome (accent border + fill);
 -- factories don't decorate the row text with prefixes.
+--
+-- Identity rule (spec section 10): every loop-rendered row MUST declare a
+-- key function. WowScrollBoxList tracks elementData by reference today, but
+-- the explicit key is the contract surface for future migrations (diffing,
+-- animation, focus preservation across re-layouts).
 
 VFN = VFN or {}
 VFN.Rows = VFN.Rows or { byName = {} }
-
--- Back-compat alias so existing code that calls VFN.RowBehaviours:Register
--- still works during the migration. New code should call VFN.Rows.
-VFN.RowBehaviours = VFN.Rows
 
 local R = VFN.Rows
 
@@ -56,6 +58,12 @@ function R:Register(name, def)
     end
     if def.onClick ~= nil and type(def.onClick) ~= "function" then
         error(("VFN.Rows: %q.onClick must be a function or nil"):format(name), 2)
+    end
+    -- Spec section 10: every loop-rendered row declares a stable key
+    -- function. Validator errors loudly so the omission isn't silent.
+    if type(def.key) ~= "function" then
+        error(("VFN.Rows: %q.key is required (function(elementData) -> string;"
+            .. " spec section 10 -- stable per-row identity)"):format(name), 2)
     end
 
     self.byName[name] = def

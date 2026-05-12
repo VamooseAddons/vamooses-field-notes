@@ -82,9 +82,10 @@ VFN.Constants = {
         CONFIG_SET          = "VFN_CONFIG_SET",
         HARD_RESET          = "VFN_HARD_RESET",
         UI_SET_PERSISTENT   = "VFN_UI_SET_PERSISTENT",  -- writes to account.ui (saved)
-        UI_SET_TRANSIENT    = "VFN_UI_SET_TRANSIENT",   -- writes to session.ui (cleared on /reload)
+        UI_SET_TRANSIENT    = "VFN_UI_SET_TRANSIENT",   -- writes to session.ui (cleared on /reload). payload.view optional for per-view sub-tables.
         UI_TOGGLE_MAP       = "VFN_UI_TOGGLE_MAP",
-        VIEWLOCAL_SET       = "VFN_VIEWLOCAL_SET",
+        MAIN_WINDOW_TOGGLE  = "VFN_MAIN_WINDOW_TOGGLE",  -- account.ui.mainWindowShown flip; SSoT for the addon's open/closed state across /reload
+        SESSION_END         = "VFN_SESSION_END",         -- dispatched at PLAYER_LOGOUT; reducer closes the window so next login starts clean
         APPLY_LOG_APPEND    = "VFN_APPLY_LOG_APPEND",
         LIBRARY_CREATE      = "VFN_LIBRARY_CREATE",
         LIBRARY_DELETE      = "VFN_LIBRARY_DELETE",
@@ -95,6 +96,12 @@ VFN.Constants = {
         SET_CLOSE           = "VFN_SET_CLOSE",        -- collapsed from Store:CloseSet
         SET_UPDATE          = "VFN_SET_UPDATE",
         SET_MOVE_LIBRARY    = "VFN_SET_MOVE_LIBRARY",
+        -- Combat-state lifecycle. Dispatched by CombatMiddleware on
+        -- PLAYER_REGEN_DISABLED / PLAYER_REGEN_ENABLED. Reducer is the
+        -- single mutation point for session.combat.inLockdown (SSoT --
+        -- middleware does NOT mutate state directly; spec section 4.4).
+        COMBAT_ENTER        = "VFN_COMBAT_ENTER",
+        COMBAT_EXIT         = "VFN_COMBAT_EXIT",
     },
     NOTIFICATIONS = {
         WAYPOINTS_SENT      = "VFN_WAYPOINTS_SENT",

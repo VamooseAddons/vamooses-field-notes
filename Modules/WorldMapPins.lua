@@ -12,8 +12,6 @@ local INVALID_STATUSES = {
 }
 
 local provider
-local attachFrame
-local combatFrame
 local refreshQueued = false
 local initialized = false
 local sentEntryIDs = {}
@@ -40,31 +38,20 @@ local function IsInCombat()
     return InCombatLockdown and InCombatLockdown()
 end
 
-local function EnsureCombatFrame()
-    if combatFrame then return combatFrame end
-    combatFrame = CreateFrame("Frame")
-    combatFrame:SetScript("OnEvent", function(self, event)
-        if event ~= "PLAYER_REGEN_ENABLED" then return end
-        self:UnregisterEvent("PLAYER_REGEN_ENABLED")
-        if refreshQueued then
-            refreshQueued = false
-            WMP:Refresh()
-        end
-    end)
-    return combatFrame
-end
-
+-- Defer pin refreshes that arrive during combat. Per spec section 15.7,
+-- PLAYER_REGEN_* events are owned by CombatMiddleware; modules NEVER call
+-- _internalSubscribe for the regen events themselves. CombatMiddleware
+-- dispatches VFN_COMBAT_EXIT through the chain on combat-end; the Store
+-- subscription below (onInitialize) sees that action and replays the
+-- queued refresh.
 local function QueueCombatRefresh()
     refreshQueued = true
-    local frame = EnsureCombatFrame()
-    frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 end
 
 local function GetSelectedSet()
-    local state = VFN.Store and VFN.Store.GetState and VFN.Store:GetState() or nil
-    local account = state and state.account or nil
-    local selectedSetID = account and account.ui and account.ui.selectedSetID or nil
-    local set = selectedSetID and account and account.sets and account.sets[selectedSetID] or nil
+    local account = VFN.Store:GetState().account
+    local selectedSetID = account.ui.selectedSetID
+    local set = selectedSetID and account.sets[selectedSetID] or nil
     if not set or set.deletedAt or set.archived then return nil, nil end
     return selectedSetID, set
 end
@@ -88,9 +75,7 @@ local function SetPinColor(pin, entryID)
     -- Theme.Skinners.PinDot so a palette swap repaints automatically.
     -- (PinDot uses _vfnSelected to pick warning-vs-accent; for world-map
     -- pins "sent" maps to the warning/highlight semantic.)
-    if VFN.Theme and VFN.Theme.Register then
-        VFN.Theme:Register(pin.Dot, "PinDot", { selected = sentEntryIDs[entryID] and true or false })
-    end
+    VFN.Theme:Register(pin.Dot, "PinDot", { selected = sentEntryIDs[entryID] and true or false })
     if pin.Dot.SetAlpha then
         local constants = VFN.Constants or {}
         local alpha = sentEntryIDs[entryID] and constants.WORLD_MAP_PIN_SENT_ALPHA or constants.WORLD_MAP_PIN_ALPHA
@@ -147,18 +132,13 @@ local function AttachProvider()
     WorldMapFrame:AddDataProvider(provider)
 end
 
-local function RegisterWorldMapLoad()
-    if attachFrame then return end
-
-    attachFrame = CreateFrame("Frame")
-    attachFrame:RegisterEvent("ADDON_LOADED")
-    attachFrame:SetScript("OnEvent", function(self, _, addonName)
-        if addonName ~= "Blizzard_WorldMap" then return end
-        if not WorldMapFrame then return end
-        self:UnregisterAllEvents()
-        AttachProvider()
-        WMP:Refresh()
-    end)
+-- ADDON_LOADED handler for Blizzard_WorldMap. Now wired declaratively via
+-- Modules:Declare's blizzardEvents (see bottom of file). This function is
+-- the handler body; it runs when the engine fires the subscription.
+local function OnBlizzardWorldMapLoaded(_self)
+    if not WorldMapFrame then return end
+    AttachProvider()
+    WMP:Refresh()
 end
 
 function VFN.WorldMapPins:Refresh()
@@ -223,41 +203,64 @@ end
 
 function VFNWorldMapPinMixin:OnClick(button)
     if button and button ~= "LeftButton" then return end
-    local setID = self._setID
-    if setID and VFN.Store and VFN.Store.OpenSet then
-        VFN.Store:OpenSet(setID)
-    end
-    if VFN.ToggleMainWindow then
-        Defer(function()
-            -- C_Timer.After(0, ...) fires next frame, possibly during combat.
-            -- Toggle ultimately Show/Hides VFN_MainFrame -- guard so we don't
-            -- mutate the UI tree under combat lockdown (RefreshMainWindow has
-            -- a queue-replay for this case, but ToggleMainWindow itself does
-            -- not, so we bail here cleanly).
-            if _G.InCombatLockdown and _G.InCombatLockdown() then return end
-            VFN:ToggleMainWindow()
-        end)
-    end
+    if self._setID then VFN.Store:OpenSet(self._setID) end
+    Defer(function()
+        -- C_Timer.After(0, ...) fires next frame, possibly during combat.
+        -- Toggle ultimately Show/Hides VFN_MainFrame -- guard so we don't
+        -- mutate the UI tree under combat lockdown (RefreshMainWindow has
+        -- a queue-replay for this case, but ToggleMainWindow itself does
+        -- not, so we bail here cleanly).
+        if _G.InCombatLockdown and _G.InCombatLockdown() then return end
+        VFN:ToggleMainWindow()
+    end)
 end
 
-function WMP:Init()
-    if initialized then return end
-    initialized = true
+-- Module registration: onInitialize attaches if WorldMapFrame is already
+-- present; otherwise the blizzardEvents subscription fires when the map
+-- module loads later. No legacy Init() entry point -- Modules:Boot owns
+-- the lifecycle.
+VFN.Modules:Declare({
+    name = "WorldMapPins",
+    -- Spec section 14: `dependencies` lists OTHER registered modules whose
+    -- onInitialize must run first. Engine singletons (Store, Theme,
+    -- BlizzardEvents, Constants) are NOT modules -- they boot in Init.lua
+    -- before Modules:Boot runs, so depending on them is implicit. Today
+    -- WorldMapPins has no peer-module deps.
+    dependencies = {},
+    OnBlizzardWorldMapLoaded = OnBlizzardWorldMapLoaded,
+    blizzardEvents = {
+        ADDON_LOADED = {
+            handler = "OnBlizzardWorldMapLoaded",
+            filter  = function(addonName) return addonName == "Blizzard_WorldMap" end,
+            once    = true,
+        },
+    },
+    onInitialize = function()
+        if initialized then return end
+        initialized = true
 
-    if WorldMapFrame then
-        AttachProvider()
-    else
-        RegisterWorldMapLoad()
-    end
+        if WorldMapFrame then
+            AttachProvider()
+        end
 
-    -- Subscribe to Store changes. We DO care about action granularity here
-    -- (only specific actions invalidate pin paint), so we filter on action.
-    if VFN.Store and VFN.Store.Subscribe then
+        -- Subscribe to Store changes. We DO care about action granularity
+        -- here (only specific actions invalidate pin paint), so we filter
+        -- on action. VFN_COMBAT_EXIT is the spec-aligned replacement for
+        -- the old direct _internalSubscribe -- when combat ends and a
+        -- refresh was queued mid-combat, replay it.
+        local A = VFN.Constants.ACTIONS
         VFN.Store:Subscribe(function(action)
-            if REFRESH_ACTIONS[action] then WMP:Refresh() end
+            if action == A.COMBAT_EXIT then
+                if refreshQueued then
+                    refreshQueued = false
+                    WMP:Refresh()
+                end
+            elseif REFRESH_ACTIONS[action] then
+                WMP:Refresh()
+            end
         end)
-    end
-end
+    end,
+})
 
 function WMP:SetSentEntries(entries, set)
     wipe(sentEntryIDs)

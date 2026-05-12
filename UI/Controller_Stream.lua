@@ -12,15 +12,20 @@ local StreamController = VFN.StreamController
 local CH = VFN.ControllerHelpers
 local W, SetText = CH.UI.W, CH.UI.SetText
 
+-- File-local upvalues for hot WoW globals (spec section 13.3 -- ~2x faster
+-- than per-call lookup). UnitName / GetRealmName are loaded by the time
+-- this file runs (mock-test ordering matches production WoW boot order).
+-- C_Map stays as an inline _G.C_Map lookup because some test fixtures
+-- mock C_Map AFTER Controller_Stream loads; capturing it as a file-local
+-- here would freeze a stale nil reference.
+local UnitName     = _G.UnitName
+local GetRealmName = _G.GetRealmName
+
 -- Player-state helpers (WoW API access; not pure but localised here) -------
 
-local function GetCurrentMapID()
-    return _G.C_Map and _G.C_Map.GetBestMapForUnit and _G.C_Map.GetBestMapForUnit("player") or nil
-end
-
 local function GetCurrentCharacterKey()
-    if not (_G.UnitName and _G.GetRealmName) then return nil end
-    local name, realm = _G.UnitName("player"), _G.GetRealmName()
+    if not (UnitName and GetRealmName) then return nil end
+    local name, realm = UnitName("player"), GetRealmName()
     if name and name ~= "" and realm and realm ~= "" then
         return name .. "-" .. realm
     end
@@ -115,6 +120,7 @@ VFN.Rows:Register("streamRow", {
     font   = "body",
     height = 60,
     factory = streamRowFactory,
+    key    = function(ed) return tostring(ed and ed.setID or "?") end,
 })
 
 -- Status text helpers --------------------------------------------------------
@@ -132,17 +138,6 @@ VFN.Rows:Register("streamRow", {
 
 local function SetDraftStatus(rootFrame, text)
     SetText(W(rootFrame, "captureForm.status"), text)
-end
-
-local function SetStreamStatus(rootFrame, count)
-    local widget = W(rootFrame, "streamPanel.streamStatus")
-    if not widget then return end
-    if count > 0 then
-        local noun = count == 1 and "field note" or "field notes"
-        SetText(widget, tostring(count) .. " " .. noun)
-    else
-        SetText(widget, "no saved field notes")
-    end
 end
 
 -- Save / current location ---------------------------------------------------
@@ -189,7 +184,7 @@ end
 local function Send(rootFrame)
     local sourceText = GetWidgetText(W(rootFrame, "captureForm.sourceBox"))
     local parsed = VFN.CoordParser:Parse(sourceText)
-    local resolved = VFN.CoordResolver:Resolve(parsed, { currentMapID = GetCurrentMapID() })
+    local resolved = VFN.CoordResolver:Resolve(parsed, { currentMapID = CH.Mechanics.GetCurrentMapID() })
 
     if #resolved.entries == 0 then
         SetDraftStatus(rootFrame, "No valid coordinates found.")
@@ -362,7 +357,7 @@ end
 
 -- Library dropdown above the stream list -- click pops a context menu of
 -- every non-deleted library; selecting one writes the choice into
--- viewLocal.stream.libraryID and BuildStreamItems re-filters.
+-- session.ui.stream.libraryID and BuildStreamItems re-filters.
 local function ShowStreamLibraryMenu(ownerFrame)
     local state = CH.Mechanics.GetState()
     if not (state and state.account) then return end
@@ -392,7 +387,7 @@ local function ShowStreamLibraryMenu(ownerFrame)
                 e.name, e.isDefault and "  [Default]" or "", e.count),
             callback = function()
                 -- Default = nil sentinel so a fresh session falls back cleanly.
-                CH.Mechanics.DispatchViewLocal("stream", "libraryID",
+                CH.Mechanics.SetUITransientView("stream", "libraryID",
                     (libID == defaultID) and nil or libID)
             end,
         }
@@ -465,16 +460,9 @@ function StreamController:Wire(rootFrame)
     end
 end
 
--- Refresh is empty -- every stream-tab widget value flows through the
--- BindingEngine via the spec's `binding` field:
---   streamList     -> stream.items
---   streamStatus   -> stream.statusText
---   libraryDropdown-> stream.libraryDropdownLabel
---   captureBtn     -> stream.captureActive
---   libraryBtn     -> stream.libraryActive
---   configBtn      -> stream.configActive
---   backBtn        -> stream.backActive
-function StreamController:Refresh(_rootFrame, _ctx)
-end
+-- (No Refresh -- every stream-tab widget value flows through bindings:
+--  streamList -> stream.items; streamStatus -> stream.statusText;
+--  libraryDropdown -> stream.libraryDropdownLabel; the four icon buttons
+--  -> stream.{capture,library,config,back}Active.)
 
 VFN.Controllers:Register("stream", StreamController)

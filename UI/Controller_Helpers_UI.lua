@@ -15,6 +15,11 @@ VFN.ControllerHelpers.UI = VFN.ControllerHelpers.UI or {}
 
 local UI = VFN.ControllerHelpers.UI
 
+-- These globals (StaticPopupDialogs, StaticPopup_Show, MenuUtil) are read
+-- inline from _G rather than hoisted to file-locals because some test
+-- fixtures swap the mock AFTER this file loads. A file-local snapshot
+-- would freeze the pre-mock value and break those tests.
+
 -- ===== Widget access =====================================================
 
 function UI.W(rootFrame, id)
@@ -130,9 +135,7 @@ function UI.ensureRowText(row, font)
     end
     if row.vfnText.SetJustifyH then row.vfnText:SetJustifyH("LEFT") end
     if row.vfnText.SetWordWrap then row.vfnText:SetWordWrap(false) end
-    if VFN.UI and VFN.UI.applyFontRole then
-        VFN.UI.applyFontRole(row.vfnText, font)
-    end
+    VFN.UI.applyFontRole(row.vfnText, font)
     VFN.Theme:Register(row.vfnText, "Text")
 end
 
@@ -143,7 +146,7 @@ function UI.clearRow(row)
 end
 
 -- Generic row factory builder. Returns a function (font) -> { Configure, Reset }
--- matching the LayoutRegistry "row:<name>" contract. Pass:
+-- matching the VFN.Rows "row:<name>" contract. Pass:
 --   opts.deriveText(elementData)  -- text for this element
 --   opts.onClick(elementData)     -- optional; returns OnClick handler
 --   opts.height                   -- row height
@@ -214,9 +217,7 @@ function UI.MakeStackedRowFactory(opts)
                         end
                         fs:SetJustifyH("LEFT")
                         fs:SetWordWrap(line.wrap == true)
-                        if VFN.UI and VFN.UI.applyFontRole then
-                            VFN.UI.applyFontRole(fs, line.fontRole or template.font)
-                        end
+                        VFN.UI.applyFontRole(fs, line.fontRole or template.font)
                         VFN.Theme:Register(fs, line.themeRole or "Text")
                         row["vfnLine" .. i] = fs
                         prevFs = fs
@@ -272,27 +273,19 @@ end
 -- Construction lives in VFN.UI:EnsureRowChrome / :EnsureRowBadge (Components).
 -- Paint lives in VFN.Theme.Skinners.RowChrome / .BadgePill. These thin
 -- wrappers stash the per-row state and register with the Theme registry so
--- Theme:Reload() repaints every registered row via ApplyAll automatically.
-
-function UI.EnsureRowChrome(row)
-    return VFN.UI and VFN.UI.EnsureRowChrome and VFN.UI:EnsureRowChrome(row) or nil
-end
+-- Theme repaints flow through every registered row automatically.
 
 function UI.PaintRowChrome(row, selected)
     if not row then return end
-    if VFN.UI and VFN.UI.EnsureRowChrome then VFN.UI:EnsureRowChrome(row) end
-    if VFN.Theme and VFN.Theme.Register then
-        VFN.Theme:Register(row, "RowChrome", { selected = selected and true or false })
-    end
+    VFN.UI:EnsureRowChrome(row)
+    VFN.Theme:Register(row, "RowChrome", { selected = selected and true or false })
 end
 
 function UI.PaintRowBadge(row, text)
     if not row then return end
-    if VFN.UI and VFN.UI.EnsureRowBadge then VFN.UI:EnsureRowBadge(row) end
-    if VFN.Theme and VFN.Theme.Register then
-        VFN.Theme:Register(row, "BadgePill", {
-            text = (text ~= nil and text ~= "") and text or nil,
-            variant = "count",
-        })
-    end
+    VFN.UI:EnsureRowBadge(row)
+    VFN.Theme:Register(row, "BadgePill", {
+        text = (text ~= nil and text ~= "") and text or nil,
+        variant = "count",
+    })
 end

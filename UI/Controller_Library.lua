@@ -12,8 +12,9 @@
 --
 -- Card-row right-click opens "Move to..." (CH.UI.ShowMenu).
 --
--- Selection + find state lives in state.session.viewLocal.library (transient).
--- Read via CH.Mechanics.GetViewLocal("library"); write via CH.DispatchViewLocal.
+-- Selection + find state lives in state.session.ui.library (transient).
+-- Read via CH.Mechanics.GetUIView("library"); write via
+-- CH.Mechanics.SetUITransientView("library", key, value).
 
 VFN = VFN or {}
 VFN.LibraryController = VFN.LibraryController or {}
@@ -116,14 +117,14 @@ end
 -- inspecting widgets. Helpers wrap the dispatch + read calls so the
 -- routing change is local if we ever rename the state path.
 local function editsDirty()
-    local libUI = CH.Mechanics.GetViewLocal("library")
+    local libUI = CH.Mechanics.GetUIView("library")
     return libUI.editsDirty == true
 end
 
 local function clearEditsDirty()
-    CH.Mechanics.DispatchViewLocal("library", "editsDirty", false)
-    CH.Mechanics.DispatchViewLocal("library", "editingTitle", nil)
-    CH.Mechanics.DispatchViewLocal("library", "editingNote", nil)
+    CH.Mechanics.SetUITransientView("library", "editsDirty", false)
+    CH.Mechanics.SetUITransientView("library", "editingTitle", nil)
+    CH.Mechanics.SetUITransientView("library", "editingNote", nil)
 end
 
 -- Wrap a selection-changing dispatch so we prompt before clobbering unsaved
@@ -172,12 +173,12 @@ local function libraryIndexRowFactory(template)
                         ShowLibraryMenu(ed.libraryID, self)
                         return
                     end
-                    local cur = CH.Mechanics.GetViewLocal("library")
+                    local cur = CH.Mechanics.GetUIView("library")
                     local wouldDiscard = (cur.selectedLibraryID ~= ed.libraryID)
                                          or cur.selectedSetID ~= nil
                     withDirtyGuard(wouldDiscard, function()
-                        CH.Mechanics.DispatchViewLocal("library", "selectedLibraryID", ed.libraryID)
-                        CH.Mechanics.DispatchViewLocal("library", "selectedSetID", nil)
+                        CH.Mechanics.SetUITransientView("library", "selectedLibraryID", ed.libraryID)
+                        CH.Mechanics.SetUITransientView("library", "selectedSetID", nil)
                     end)
                 end)
             end
@@ -208,10 +209,10 @@ local _libraryCardRowBase = CH.UI.MakeStackedRowFactory({
     },
     onClick = function(ed)
         return function()
-            local cur = CH.Mechanics.GetViewLocal("library")
+            local cur = CH.Mechanics.GetUIView("library")
             local wouldDiscard = (cur.selectedSetID ~= ed.setID)
             withDirtyGuard(wouldDiscard, function()
-                CH.Mechanics.DispatchViewLocal("library", "selectedSetID", ed.setID)
+                CH.Mechanics.SetUITransientView("library", "selectedSetID", ed.setID)
             end)
         end
     end,
@@ -245,6 +246,10 @@ local function renderRowChips(row, chips)
         local labelText = labelByVariant[variant] or variant
         if not chip then
             chip = VFN.UI:Chip(row, labelText, variant)
+            -- Direct factory call (not through Layout's buildKind), so the
+            -- caller drives Theme registration. RegisterKind pulls the skin
+            -- role from VFN.WidgetTypes -- ONE source of truth (spec 5).
+            VFN.Theme:RegisterKind(chip, "chip", { status = variant })
             pool[i] = chip
         end
         if chip then
@@ -347,16 +352,19 @@ VFN.Rows:Register("libraryIndexRow", {
     font   = "body",
     height = 28,
     factory = libraryIndexRowFactory,
+    key    = function(spec, _ctx) return tostring(spec and spec.libraryID or "?") end,
 })
 VFN.Rows:Register("libraryCardRow", {
     font   = "body",
     height = 78,
     factory = libraryCardRowFactory,
+    key    = function(ed) return tostring(ed and ed.setID or "?") end,
 })
 VFN.Rows:Register("libraryCoordPreviewRow", {
     font   = "body",
     height = 22,
     factory = libraryCoordPreviewRowFactory,
+    key    = function(ed) return tostring(ed and (ed.entryID or ed.index) or "?") end,
 })
 
 -- ===== Editable triple (title + note) =======================================
@@ -371,7 +379,7 @@ local function SetActionStatus(rootFrame, text)
 end
 
 local function SaveEdits(rootFrame)
-    local libUI = CH.Mechanics.GetViewLocal("library")
+    local libUI = CH.Mechanics.GetUIView("library")
     local setID = libUI.selectedSetID
     if not setID then
         SetActionStatus(rootFrame, "Select a card first.")
@@ -412,7 +420,7 @@ local SORT_CYCLE  = { recent = "alpha",  alpha  = "size", size = "recent" }
 local FILTERS     = { "all", "ready", "has_note", "blocked" }
 
 local function GetFindState()
-    local lib = CH.Mechanics.GetViewLocal("library") or {}
+    local lib = CH.Mechanics.GetUIView("library") or {}
     return {
         query  = lib.searchQuery  or "",
         filter = lib.activeFilter or "all",
@@ -433,8 +441,8 @@ function LibraryController:Wire(rootFrame)
     local function makeStager(field)
         return function(box, userInput)
             if not userInput then return end
-            CH.Mechanics.DispatchViewLocal("library", field, box:GetText() or "")
-            CH.Mechanics.DispatchViewLocal("library", "editsDirty", true)
+            CH.Mechanics.SetUITransientView("library", field, box:GetText() or "")
+            CH.Mechanics.SetUITransientView("library", "editsDirty", true)
             SetActionStatus(rootFrame, "Unsaved edits -- click Save or Restore.")
         end
     end
@@ -453,7 +461,7 @@ function LibraryController:Wire(rootFrame)
     if searchBox and searchBox.SetScript then
         searchBox:SetScript("OnTextChanged", function(self, userInput)
             if userInput then
-                CH.Mechanics.DispatchViewLocal("library", "searchQuery", self:GetText() or "")
+                CH.Mechanics.SetUITransientView("library", "searchQuery", self:GetText() or "")
             end
         end)
     end
@@ -461,7 +469,7 @@ function LibraryController:Wire(rootFrame)
     -- Sort cycle button.
     CH.UI.OnClick(rootFrame, "libraryPanel.sortButton", function()
         local cur = GetFindState()
-        CH.Mechanics.DispatchViewLocal("library", "sortOrder", SORT_CYCLE[cur.sort] or "recent")
+        CH.Mechanics.SetUITransientView("library", "sortOrder", SORT_CYCLE[cur.sort] or "recent")
     end)
 
     -- Filter chips -- each writes activeFilter, Refresh repaints variants.
@@ -469,13 +477,13 @@ function LibraryController:Wire(rootFrame)
         local widgetId = "libraryPanel.filter" ..
             (filter == "has_note" and "HasNote" or (filter:sub(1, 1):upper() .. filter:sub(2)))
         CH.UI.OnClick(rootFrame, widgetId, function()
-            CH.Mechanics.DispatchViewLocal("library", "activeFilter", filter)
+            CH.Mechanics.SetUITransientView("library", "activeFilter", filter)
         end)
     end
 
     -- Cards-action row: Send Waypoints / Move to / Delete (operate on selected card).
     CH.UI.OnClick(rootFrame, "libraryPanel.sendWaypointsButton", function()
-        local libUI = CH.Mechanics.GetViewLocal("library")
+        local libUI = CH.Mechanics.GetUIView("library")
         local state = CH.Mechanics.GetState()
         local set = libUI.selectedSetID and state and state.account.sets[libUI.selectedSetID]
         if not (set and set.entries and #set.entries > 0) then return end
@@ -495,12 +503,12 @@ function LibraryController:Wire(rootFrame)
     end)
 
     CH.UI.OnClick(rootFrame, "libraryPanel.moveToButton", function(btn)
-        local libUI = CH.Mechanics.GetViewLocal("library")
+        local libUI = CH.Mechanics.GetUIView("library")
         if libUI.selectedSetID then ShowMoveMenu(libUI.selectedSetID, btn) end
     end)
 
     CH.UI.OnClick(rootFrame, "libraryPanel.deleteCardButton", function()
-        local libUI = CH.Mechanics.GetViewLocal("library")
+        local libUI = CH.Mechanics.GetUIView("library")
         local setID = libUI.selectedSetID
         if not setID then return end
         CH.UI.Confirm({
@@ -509,11 +517,10 @@ function LibraryController:Wire(rootFrame)
             accept   = "Delete",
             data     = setID,
             onAccept = function(_, data)
-                if VFN.Store and VFN.Store.DeleteSet then
-                    VFN.Store:DeleteSet(data)
-                    -- Clear selected-set so curator panel resets cleanly.
-                    CH.Mechanics.DispatchViewLocal("library", "selectedSetID", nil)
-                end
+                -- Curator's library.selectedSetID + dirty edit state get
+                -- cleared automatically by NormaliseSelection inside the
+                -- SET_DELETE reducer -- no manual clean-up here.
+                CH.Mechanics.DeleteSet(data)
             end,
         })
     end)
@@ -522,7 +529,7 @@ function LibraryController:Wire(rootFrame)
     -- /way line per entry. StaticPopup's editbox is single-line so we
     -- build a proper frame the first time it's needed and reuse it after.
     CH.UI.OnClick(rootFrame, "libraryPanel.previewCopyButton", function()
-        local libUI = CH.Mechanics.GetViewLocal("library")
+        local libUI = CH.Mechanics.GetUIView("library")
         local state = CH.Mechanics.GetState()
         local set = libUI.selectedSetID and state and state.account.sets[libUI.selectedSetID]
         local entries = (set and set.entries) or {}
@@ -560,20 +567,8 @@ function LibraryController:Wire(rootFrame)
     end)
 end
 
--- ===== Refresh ==============================================================
---
--- Refresh handles only the one piece of state-shape healing that bindings
--- can't express (a pure read-only selector can't write state). Everything
--- else -- card list, stat values, label text, button enabled/active, edit-
--- box content -- flows through bindings.
-function LibraryController:Refresh(_rootFrame, ctx)
-    local state = (ctx and ctx.state) or CH.Mechanics.GetState()
-    if not state then return end
-    local libUI = CH.Mechanics.GetViewLocal("library")
-    local libs = state.account.libraries or {}
-    if not (libUI.selectedLibraryID and libs[libUI.selectedLibraryID]) then
-        CH.Mechanics.DispatchViewLocal("library", "selectedLibraryID", state.account.defaultLibraryID)
-    end
-end
+-- (No Refresh -- every widget value flows through bindings; selection
+--  invariants live in the Store's NormaliseSelection. Controllers:RefreshAll
+--  no-ops on controllers without a :Refresh method.)
 
 VFN.Controllers:Register("library", LibraryController)

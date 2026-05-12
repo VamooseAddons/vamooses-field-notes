@@ -11,7 +11,7 @@
 --                       Optionally declare slots: header / body / footer.
 --   sections[id]     -- virtual layout boxes inside a panel slot or another
 --                       section. layout = vertical | horizontal | fill.
---   widgets[id]      -- leaf nodes. kind names a factory in LayoutRegistry.
+--   widgets[id]      -- leaf nodes. kind names a registered WidgetType.
 --
 -- Routing:
 --   Every section / widget declares
@@ -234,6 +234,16 @@ VFN.LayoutConfig = {
             -- capture form, the rolling history list collapses away.
             visibleInViews = { "collapsed", "detail", "library", "config" },
         },
+        -- Header row INSIDE the stream list: library dropdown + count label.
+        -- Lives in `sections`, not `widgets` -- it's a layout grouping, not a
+        -- leaf. Holds streamPanel.libraryDropdown + streamPanel.streamStatus.
+        ["stream.streamListHeader"] = {
+            ["in"] = "stream.streamList",
+            layout = "horizontal",
+            height = 22,
+            gap = "md",
+            order = 5,
+        },
         -- (No filter row in stream mode -- character filter dropped per
         -- design. The setting still exists in state.account.config and
         -- defaults to "current"; if we ever want to expose it again, slap
@@ -294,6 +304,7 @@ VFN.LayoutConfig = {
             -- from the main panel header.
             padding = "lg",
             gap = "lg",
+            order = 10,    -- drawerPanel is a stacked container; explicit order required
         },
         ["drawer.map"] = {
             ["in"] = "drawer.body",
@@ -472,6 +483,10 @@ VFN.LayoutConfig = {
         -- active (Controller_Stream rewrites the label with a marker prefix
         -- on Refresh). Click toggles -- click again on the active view
         -- returns to detail/collapsed.
+        -- Tooltips here use the spec section 3 structured form
+        -- (`tooltip = { title, body, anchor }`). The button factory promotes
+        -- spec.tooltip into the legacy opts.tooltip/opts.tooltipBody shape
+        -- so the existing TooltipEngine attachment keeps working.
         ["streamPanel.captureButton"] = {
             kind = "button", ["in"] = "streamPanel", slot = "header",
             width = 24, height = 24, order = 50,
@@ -481,8 +496,8 @@ VFN.LayoutConfig = {
                 atlas = "housing-stair-arrow-down",
                 activeAtlas = "housing-stair-arrow-up",
                 size = 24,
-                tooltip = "Minimize / Expand",
             },
+            tooltip = { title = "Minimize / Expand" },
             binding = { active = "stream.captureActive" },
         },
         -- Back-to-stream toggle. Same housing-stair-arrow atlases as the
@@ -498,8 +513,8 @@ VFN.LayoutConfig = {
                 activeAtlas = "housing-stair-arrow-up", -- rotated: points right
                 size = 24,
                 rotation = -1.5707963,                  -- -pi/2 (90 deg CW)
-                tooltip = "Back to Stream",
             },
+            tooltip = { title = "Back to Stream" },
             binding = { active = "stream.backActive" },
         },
         ["streamPanel.libraryButton"] = {
@@ -508,7 +523,8 @@ VFN.LayoutConfig = {
             -- List icon -- "library" reads as a list of saved sets.
             -- Hidden in capture mode -- minimal view keeps just Expand + close.
             visibleInViews = { "collapsed", "detail", "library", "config" },
-            options = { atlas = "decor-placement-list", size = 24, tooltip = "Library" },
+            options = { atlas = "decor-placement-list", size = 24 },
+            tooltip = { title = "Library" },
             binding = { active = "stream.libraryActive" },
         },
         ["streamPanel.configButton"] = {
@@ -516,7 +532,8 @@ VFN.LayoutConfig = {
             width = 24, height = 24, order = 30,
             -- Cog -- mirrors HDG HouseTab's Customise / Settings toggle.
             visibleInViews = { "collapsed", "detail", "library", "config" },
-            options = { atlas = "decor-controls-settings", size = 24, tooltip = "Config" },
+            options = { atlas = "decor-controls-settings", size = 24 },
+            tooltip = { title = "Config" },
             binding = { active = "stream.configActive" },
         },
         ["streamPanel.closeButton"] = {
@@ -535,7 +552,7 @@ VFN.LayoutConfig = {
         -- width omitted -> flex; sits between the title and the right-side
         -- action buttons.
         ["mainPanel.subtitle"] = {
-            kind = "labelDim", ["in"] = "mainPanel", slot = "header",
+            kind = "label", tags = {"dim"}, ["in"] = "mainPanel", slot = "header",
             text = "", font = "small",
             height = 14, order = 20,
             binding = "detail.subtitle",
@@ -548,7 +565,7 @@ VFN.LayoutConfig = {
             binding = "drawer.title",
         },
         ["drawerPanel.subtitle"] = {
-            kind = "labelDim", ["in"] = "drawerPanel", slot = "header",
+            kind = "label", tags = {"dim"}, ["in"] = "drawerPanel", slot = "header",
             text = "auto preview", font = "small",
             height = 12, width = 140, order = 20,
             binding = "drawer.subtitle",
@@ -559,7 +576,7 @@ VFN.LayoutConfig = {
         -- old "Unsaved draft" header + "Save to add to stream" hint + the
         -- per-input "Draft - paste coordinates below..." footer text. One
         -- field, one place to look. Controller_Stream owns the messages.
-        -- kind = "labelStatus" -> accent-coloured FontString (semantic.accent)
+        -- kind = "label" + tags = {"status"} -> accent FontString (semantic.accent)
         -- so the eye catches it as a status notification, not body text.
         ["captureForm.status"] = {
             kind = "statusBanner", ["in"] = "stream.capture", font = "body",
@@ -629,20 +646,16 @@ VFN.LayoutConfig = {
 
         -- ===== Stream list =====
         -- Header row: library dropdown (LEFT, flex) + count subtitle (RIGHT).
-        ["stream.streamListHeader"] = {
-            ["in"] = "stream.streamList",
-            layout = "horizontal",
-            height = 22,
-            gap = "md",
-            order = 5,
-        },
+        -- NOTE: stream.streamListHeader is declared as a section in the
+        -- sections block above (around line 228) -- not here. This block
+        -- only holds widget specs.
         ["streamPanel.libraryDropdown"] = {
             kind = "button", ["in"] = "stream.streamListHeader", font = "button",
             text = "Default", width = "auto", height = 20, order = 10, variant = "tertiary",
             binding = { text = "stream.libraryDropdownLabel" },
         },
         ["streamPanel.streamStatus"] = {
-            kind = "labelDim", ["in"] = "stream.streamListHeader", font = "small",
+            kind = "label", tags = {"dim"}, ["in"] = "stream.streamListHeader", font = "small",
             justifyH = "RIGHT", width = "fill", height = 14, order = 20,
             text = "no saved field notes",
             binding = "stream.statusText",
@@ -665,8 +678,8 @@ VFN.LayoutConfig = {
                 activeAtlas = "housing-stair-arrow-up", -- rotated: points right
                 size = 24,
                 rotation = -1.5707963,                  -- -pi/2 (90 deg CW)
-                tooltip = "Back to Stream",
             },
+            tooltip = { title = "Back to Stream" },
         },
         ["mainPanel.deleteButton"] = {
             kind = "button", ["in"] = "mainPanel", slot = "header", font = "button",
@@ -682,6 +695,7 @@ VFN.LayoutConfig = {
             kind = "scrollbox", ["in"] = "main.groupRail",
             binding = "detail.mapGroupItems",
             options = { rowKind = "groupRow", spacing = 1 },
+            order = 10,    -- main.groupRail is a stacked container; explicit order required
         },
         ["mainPanel.mapPreviewButton"] = {
             kind = "button", ["in"] = "main.coordBar", font = "button",
@@ -694,7 +708,7 @@ VFN.LayoutConfig = {
             binding = { text = "detail.sourceToggleLabel" },
         },
         ["mainPanel.coordSummary"] = {
-            kind = "labelDim", ["in"] = "main.coordBar", font = "small",
+            kind = "label", tags = {"dim"}, ["in"] = "main.coordBar", font = "small",
             order = 30, text = "",
             binding = "detail.coordSummary",
         },
@@ -702,11 +716,16 @@ VFN.LayoutConfig = {
             kind = "scrollbox", ["in"] = "main.coordList",
             binding = "detail.coordItems",
             options = { rowKind = "coordRow", spacing = 4 },
+            -- Spec section 6: visibility is declarative. The toggle button
+            -- writes session.ui.showSourceText; Layout consults this selector
+            -- and omits the placement when the coord list should be hidden.
+            visible = "detail.coordListVisible",
         },
         ["mainPanel.sourceLineList"] = {
             kind = "scrollbox", ["in"] = "main.coordList",
             binding = "detail.sourceItems",
             options = { rowKind = "sourceLineRow", spacing = 4 },
+            visible = "detail.sourceListVisible",
         },
         ["mainPanel.scopeButton"] = {
             kind = "button", ["in"] = "main.actionRow", font = "button",
@@ -722,7 +741,7 @@ VFN.LayoutConfig = {
             text = "Remove Sent", width = 112, height = 24, order = 30, variant = "tertiary",
         },
         ["mainPanel.actionStatus"] = {
-            kind = "labelDim", ["in"] = "main.actionRow", font = "small",
+            kind = "label", tags = {"dim"}, ["in"] = "main.actionRow", font = "small",
             order = 40, text = "",
         },
 
@@ -731,7 +750,7 @@ VFN.LayoutConfig = {
             kind = "frame", ["in"] = "drawer.map",
         },
         ["drawerPanel.currentCardMap"] = {
-            kind = "labelDim", ["in"] = "drawer.currentCard", font = "subheading",
+            kind = "label", tags = {"dim"}, ["in"] = "drawer.currentCard", font = "subheading",
             text = "Select a pin", height = 16, order = 10,
             binding = "drawer.currentCardMap",
         },
@@ -741,12 +760,12 @@ VFN.LayoutConfig = {
             binding = "drawer.currentCardCoords",
         },
         ["drawerPanel.currentCardNote"] = {
-            kind = "labelDim", ["in"] = "drawer.currentCard", font = "body",
+            kind = "label", tags = {"dim"}, ["in"] = "drawer.currentCard", font = "body",
             text = "", height = 14, order = 30,
             binding = "drawer.currentCardNote",
         },
         ["drawerPanel.currentCardSource"] = {
-            kind = "labelDim", ["in"] = "drawer.currentCard", font = "caption",
+            kind = "label", tags = {"dim"}, ["in"] = "drawer.currentCard", font = "caption",
             text = "", height = 12, order = 40,
             binding = "drawer.currentCardSource",
         },
@@ -755,17 +774,19 @@ VFN.LayoutConfig = {
             text = "Note", height = 16, order = 10,
         },
         ["drawerPanel.setNoteBody"] = {
-            kind = "labelDim", ["in"] = "drawer.setNoteCard", font = "body",
+            kind = "label", tags = {"dim"}, ["in"] = "drawer.setNoteCard", font = "body",
             text = "", order = 20,
             options = { wrap = true },
+            binding = "drawer.setNoteBody",
         },
         ["drawerPanel.applyLogTitle"] = {
-            kind = "labelDim", ["in"] = "drawer.applyLog", font = "caption",
+            kind = "label", tags = {"dim"}, ["in"] = "drawer.applyLog", font = "caption",
             text = "Apply Log", height = 12, order = 10,
         },
         ["drawerPanel.applyLogList"] = {
             kind = "scrollbox", ["in"] = "drawer.applyLog",
             order = 20,
+            binding = "drawer.applyLog",
             options = { rowKind = "applyLogRow", spacing = 0 },
         },
 
@@ -775,7 +796,7 @@ VFN.LayoutConfig = {
             text = "Library", font = "heading", height = 18, order = 10,
         },
         ["libraryPanel.subtitle"] = {
-            kind = "labelDim", ["in"] = "libraryPanel", slot = "header",
+            kind = "label", tags = {"dim"}, ["in"] = "libraryPanel", slot = "header",
             text = "all field notes across all characters", font = "body",
             height = 14, order = 20,
             binding = "library.subtitleText",
@@ -821,7 +842,7 @@ VFN.LayoutConfig = {
             height = 1, order = 2,
         },
         ["libraryPanel.cardsHeader"] = {
-            kind = "labelStatus", ["in"] = "library.cards", font = "small",
+            kind = "label", tags = {"status"}, ["in"] = "library.cards", font = "small",
             text = "", justifyH = "LEFT", height = 12, order = 3,
             binding = "library.cardsHeaderText",
         },
@@ -945,7 +966,7 @@ VFN.LayoutConfig = {
             options = { rowKind = "libraryCoordPreviewRow", spacing = 1 },
         },
         ["libraryPanel.coordsActionStatus"] = {
-            kind = "labelStatus", ["in"] = "library.coords", font = "small",
+            kind = "label", tags = {"status"}, ["in"] = "library.coords", font = "small",
             text = "", justifyH = "LEFT", height = 14, order = 80,
         },
         ["libraryPanel.coordsSaveButton"] = {
@@ -975,7 +996,7 @@ VFN.LayoutConfig = {
             binding = { text = "config.backendLabel" },
         },
         ["configPanel.backendHint"] = {
-            kind = "labelDim", ["in"] = "config.body", font = "small",
+            kind = "label", tags = {"dim"}, ["in"] = "config.body", font = "small",
             text = "", height = 14, order = 12,
             binding = "config.backendHint",
         },
@@ -990,7 +1011,7 @@ VFN.LayoutConfig = {
             binding = { text = "config.charactersLabel" },
         },
         ["configPanel.charsHint"] = {
-            kind = "labelDim", ["in"] = "config.body", font = "small",
+            kind = "label", tags = {"dim"}, ["in"] = "config.body", font = "small",
             text = "Which characters' field notes show in the stream rail.",
             height = 14, order = 22,
         },
@@ -1004,13 +1025,52 @@ VFN.LayoutConfig = {
             text = "Debug: off", width = "auto", height = 24, order = 31, variant = "tertiary",
             binding = { text = "config.debugLabel" },
         },
+        -- Section: theme picker. One button per theme; active state binds
+        -- to a per-theme selector so the current theme reads as pressed.
+        -- Buttons clicked dispatch CONFIG_SET + Theme:LoadScheme (see
+        -- Controller_Config). order 40-49 keeps this above the destructive
+        -- actions block below.
+        ["configPanel.themeHeader"] = {
+            kind = "label", ["in"] = "config.body", font = "subheading",
+            text = "Theme", justifyH = "LEFT", height = 16, order = 40,
+        },
+        ["configPanel.themeColorblindSafe"] = {
+            kind = "button", ["in"] = "config.body", font = "button",
+            text = "Colorblind Safe", width = "auto", height = 22, order = 41, variant = "tertiary",
+            binding = { active = "config.theme.active.ColorblindSafe" },
+        },
+        ["configPanel.themeMocha"] = {
+            kind = "button", ["in"] = "config.body", font = "button",
+            text = "Catppuccin Mocha", width = "auto", height = 22, order = 42, variant = "tertiary",
+            binding = { active = "config.theme.active.Mocha" },
+        },
+        ["configPanel.themeTokyonightNight"] = {
+            kind = "button", ["in"] = "config.body", font = "button",
+            text = "Tokyonight Night", width = "auto", height = 22, order = 43, variant = "tertiary",
+            binding = { active = "config.theme.active.TokyonightNight" },
+        },
+        ["configPanel.themeRosePineMain"] = {
+            kind = "button", ["in"] = "config.body", font = "button",
+            text = "Rose Pine", width = "auto", height = 22, order = 44, variant = "tertiary",
+            binding = { active = "config.theme.active.RosePineMain" },
+        },
+        ["configPanel.themeGruvboxDarkHard"] = {
+            kind = "button", ["in"] = "config.body", font = "button",
+            text = "Gruvbox Dark Hard", width = "auto", height = 22, order = 45, variant = "tertiary",
+            binding = { active = "config.theme.active.GruvboxDarkHard" },
+        },
+        ["configPanel.themeHint"] = {
+            kind = "label", tags = {"dim"}, ["in"] = "config.body", font = "small",
+            text = "Switches paint scheme across the addon. Persisted per character.",
+            height = 14, order = 46,
+        },
         -- Section: actions (destructive)
         ["configPanel.resetButton"] = {
             kind = "button", ["in"] = "config.actions", font = "button",
             text = "Hard Reset", width = 120, height = 24, order = 10, variant = "danger",
         },
         ["configPanel.resetHint"] = {
-            kind = "labelDim", ["in"] = "config.actions", font = "small",
+            kind = "label", tags = {"dim"}, ["in"] = "config.actions", font = "small",
             text = "Wipes ALL Field Notes and settings. Cannot be undone.",
             height = 14, order = 20,
         },

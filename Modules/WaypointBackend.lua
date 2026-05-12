@@ -28,8 +28,7 @@ end
 
 local function GetConfig()
     local state = VFN.Store and VFN.Store.GetState and VFN.Store:GetState() or nil
-    local account = state and state.account or nil
-    return account and account.config or state and state.config or nil
+    return state and state.account and state.account.config or nil
 end
 
 local function GetConfiguredProvider()
@@ -136,9 +135,7 @@ local function RefreshPinState(validEntries, set)
 end
 
 local function MarkStoreDirty()
-    if VFN.Store and VFN.Store.QueueSave then
-        VFN.Store:QueueSave()
-    end
+    VFN.Store:QueueSave()
 end
 
 local function StoreSendState(set, provider, validEntries, activeEntryID, handles)

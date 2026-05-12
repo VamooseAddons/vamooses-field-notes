@@ -14,7 +14,6 @@ VFN.ConfigController = VFN.ConfigController or {}
 
 local ConfigController = VFN.ConfigController
 local CH = VFN.ControllerHelpers
-local W, SetText = CH.UI.W, CH.UI.SetText
 
 local CYCLES = VFN.Constants.CYCLES
 
@@ -37,14 +36,31 @@ function ConfigController:Wire(rootFrame)
             onAccept = function() CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.HARD_RESET) end,
         })
     end)
+
+    -- Theme picker buttons. Each one dispatches CONFIG_SET so the choice
+    -- persists (PersistenceMiddleware queues the save) AND repaints via
+    -- Theme:LoadScheme so the swap is immediate. The button's active
+    -- state comes from `config.theme.active.<Name>` (Selectors.lua).
+    local function pickTheme(name)
+        CH.Mechanics.Dispatch(VFN.Constants.ACTIONS.CONFIG_SET,
+            { key = "scheme", value = name })
+        VFN.Theme:LoadScheme(name)
+    end
+    local THEME_BUTTONS = {
+        { id = "configPanel.themeColorblindSafe",  name = "ColorblindSafe" },
+        { id = "configPanel.themeMocha",           name = "Mocha" },
+        { id = "configPanel.themeTokyonightNight", name = "TokyonightNight" },
+        { id = "configPanel.themeRosePineMain",    name = "RosePineMain" },
+        { id = "configPanel.themeGruvboxDarkHard", name = "GruvboxDarkHard" },
+    }
+    for _, entry in ipairs(THEME_BUTTONS) do
+        local target = entry.name
+        CH.UI.OnClick(rootFrame, entry.id, function() pickTheme(target) end)
+    end
 end
 
--- Refresh is empty -- every config-tab widget value flows through bindings:
---   backendButton -> config.backendLabel
---   backendHint   -> config.backendHint
---   charsButton   -> config.charactersLabel
---   debugButton   -> config.debugLabel
-function ConfigController:Refresh(_rootFrame, _ctx)
-end
+-- (No Refresh -- every config-tab widget value flows through bindings:
+--  backendButton -> config.backendLabel; backendHint -> config.backendHint;
+--  charsButton -> config.charactersLabel; debugButton -> config.debugLabel.)
 
 VFN.Controllers:Register("config", ConfigController)

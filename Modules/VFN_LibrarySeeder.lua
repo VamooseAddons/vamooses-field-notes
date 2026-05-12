@@ -75,7 +75,6 @@ local DECOR_VENDORS_SEED_KEY = "decor-vendors"
 local function SeedDecorVendors()
     local db = _G.VFN_DecorVendorsDB
     if not (db and db.zones and db.libraryName) then return end
-    if not (VFN.Store and VFN.Store.GetState and VFN.Store.CreateSet) then return end
 
     local state = VFN.Store:GetState()
     if FindLibraryBySeedKey(state, DECOR_VENDORS_SEED_KEY) then
@@ -84,9 +83,12 @@ local function SeedDecorVendors()
 
     -- Create the library and use the libraryID Dispatch returns. The seedKey
     -- stamps the library so a later rename can't trick the next seed-run.
-    local result = VFN.Store:Dispatch(VFN.Constants.ACTIONS.LIBRARY_CREATE, {
-        name    = db.libraryName,
-        seedKey = DECOR_VENDORS_SEED_KEY,
+    local result = VFN.Store:Dispatch({
+        type = VFN.Constants.ACTIONS.LIBRARY_CREATE,
+        payload = {
+            name    = db.libraryName,
+            seedKey = DECOR_VENDORS_SEED_KEY,
+        },
     })
     local libraryID = result and result.libraryID
     if not libraryID then return end  -- creation rejected (cap?), nothing more to do

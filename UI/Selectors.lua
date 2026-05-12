@@ -6,6 +6,26 @@
 --
 -- Surfaces (DetailView, StreamSurface) call these at Refresh time. New
 -- selectors go here, not in surface modules.
+--
+-- ===== Memoization status (deferred to Phase 2) ============================
+-- Spec section 11 prescribes VFN.Memo wrapping for non-trivial selectors so
+-- repeated calls within a Refresh cycle return cached results. We do NOT
+-- memoize today because the reducer in Core/Store.lua mutates state tables
+-- in place (e.g. `library.setIDs[#library.setIDs+1] = setID`). Memo's
+-- reference-equality model would see unchanged table refs and return stale
+-- results across mutations.
+--
+-- Cost analysis: deferred-notify (spec section 7.2) already batches
+-- subscriber fan-out to once per frame. Each Refresh resolves each binding
+-- once; since each selector is bound to exactly one binding name today,
+-- the memo cache would never hit within a frame. The real win comes from
+-- caching across frames when no dispatch happened -- and that requires
+-- knowing when state changed, which a tick counter could do but a proper
+-- immutable-update reducer (Phase 2 / VamooseUI extraction) does cleanly.
+--
+-- When VamooseUI lands, refactor the reducer to return new state objects
+-- on mutation. Memo then composes correctly per spec section 11 rule 1.
+-- VFN.Memo (Core/Memo.lua) is ready and tested; only consumer wiring waits.
 
 VFN = VFN or {}
 VFN.Selectors = VFN.Selectors or {}
@@ -21,10 +41,6 @@ Selectors._registry = Selectors._registry or {}
 
 function Selectors:Register(name, fn)
     self._registry[name] = fn
-end
-
-function Selectors:Get(name)
-    return self._registry[name]
 end
 
 function Selectors:Call(name, state, ctx)
@@ -195,9 +211,9 @@ function Selectors.BuildLibraryIndexItems(state)
     local items = {}
     if not state or not state.account then return items end
     local libs = state.account.libraries or {}
-    local sel = state.session and state.session.viewLocal
-        and state.session.viewLocal.library
-        and state.session.viewLocal.library.selectedLibraryID
+    local sel = state.session and state.session.ui
+        and state.session.ui.library
+        and state.session.ui.library.selectedLibraryID
     for libID, lib in pairs(libs) do
         if not lib.deletedAt then
             items[#items + 1] = {
@@ -319,9 +335,9 @@ function Selectors.BuildLibraryCardItems(state, libraryID, find)
     local lib = state.account.libraries[libraryID]
     if not lib then return items end
     local defaultLibID = state.account.defaultLibraryID
-    local sel = state.session and state.session.viewLocal
-        and state.session.viewLocal.library
-        and state.session.viewLocal.library.selectedSetID
+    local sel = state.session and state.session.ui
+        and state.session.ui.library
+        and state.session.ui.library.selectedSetID
     for _, setID in ipairs(lib.setIDs or {}) do
         local set = state.account.sets[setID]
         if set and not set.deletedAt then
@@ -365,10 +381,6 @@ function Selectors.BuildLibraryCardItems(state, libraryID, find)
     if find then items = ApplyFind(items, find, state.account.sets) end
     return items
 end
-
--- (BuildLibraryItems removed -- legacy entry point from before the library
--- tab was split into BuildLibraryIndexItems + BuildLibraryCardItems. Had
--- zero callers when the audit found it.)
 
 function Selectors.BuildApplyLogItems(state, _now)
     local items = {}
@@ -512,11 +524,11 @@ function Selectors.BuildStreamItems(state, currentCharacter)
         knownCharacters[#knownCharacters + 1] = character
     end
 
-    -- Stream-view library override: viewLocal.stream.libraryID picks which
-    -- library's cards to show. Falls back to the default library (legacy).
-    local streamLib = (state.session and state.session.viewLocal
-        and state.session.viewLocal.stream
-        and state.session.viewLocal.stream.libraryID) or nil
+    -- Stream-view library override: session.ui.stream.libraryID picks which
+    -- library's cards to show. Falls back to the default library.
+    local streamLib = (state.session and state.session.ui
+        and state.session.ui.stream
+        and state.session.ui.stream.libraryID) or nil
     local libraries = state.account.libraries or {}
     local activeLibraryID = (streamLib and libraries[streamLib] and not libraries[streamLib].deletedAt)
         and streamLib or state.account.defaultLibraryID
@@ -552,13 +564,13 @@ end
 -- ===========================================================================
 -- Registered selectors (for the binding engine).
 -- Each takes (state, ctx) and returns the value to push to a widget. Most
--- wrap the legacy Selectors.BuildXItems(...) helpers above; the wrappers
--- exist so bindings reference one stable name and the legacy signatures
--- can keep their per-arg shapes.
+-- wrap the BuildXItems(...) helpers above; the wrappers exist so bindings
+-- reference one stable name while the helpers keep their per-arg shapes
+-- (called directly from controllers for refresh-time queries).
 -- ===========================================================================
 
 local function libUI(state)
-    return (state and state.session and state.session.viewLocal and state.session.viewLocal.library) or {}
+    return (state and state.session and state.session.ui and state.session.ui.library) or {}
 end
 
 local function activeLibrary(state)
@@ -577,7 +589,6 @@ local function selectedSet(state)
 end
 
 local SORT_LABELS = { recent = "Recent", alpha = "A - Z", size = "Largest" }
-local FILTER_KEYS = { "all", "ready", "has_note", "blocked" }
 
 -- --- Library tab: index column -------------------------------------------
 Selectors:Register("library.indexItems", function(state)
@@ -697,27 +708,12 @@ Selectors:Register("library.deleteCardEnabled",  hasSelectedSet)
 Selectors:Register("library.sendCardEnabled",    hasReadyEntries)
 Selectors:Register("library.copyCoordsEnabled",  hasReadyEntries)
 
--- --- Library tab: filter chip variants (active vs tertiary) -------------
--- These are wired even though kind="button" widgets don't currently expose
--- SetVariant -- the dispatcher's "variant" field is a no-op on button. When
--- the filter widgets get migrated to kind="chip" they'll start painting
--- automatically.
-local function filterVariantFor(name)
-    return function(state)
-        return libUI(state).activeFilter == name and "primary" or "tertiary"
-    end
-end
-Selectors:Register("library.filterAllVariant",     filterVariantFor("all"))
-Selectors:Register("library.filterReadyVariant",   filterVariantFor("ready"))
-Selectors:Register("library.filterHasNoteVariant", filterVariantFor("has_note"))
-Selectors:Register("library.filterBlockedVariant", filterVariantFor("blocked"))
-
 -- ===========================================================================
 -- Stream tab selectors
 -- ===========================================================================
 
 local function streamLibraryID(state)
-    local viewLib = state.session and state.session.viewLocal and state.session.viewLocal.stream and state.session.viewLocal.stream.libraryID
+    local viewLib = state.session and state.session.ui and state.session.ui.stream and state.session.ui.stream.libraryID
     local libs = state.account.libraries or {}
     if viewLib and libs[viewLib] and not libs[viewLib].deletedAt then return viewLib end
     return state.account.defaultLibraryID
@@ -825,6 +821,18 @@ Selectors:Register("detail.sourceToggleLabel", function(state)
     return state.session.ui.showSourceText and "Coordinates" or "Source Text"
 end)
 
+-- Visibility selectors for the spec-driven Layout `visible` flag (spec
+-- section 6 -- declarative visibility replaces controller-imposed Hide).
+-- The toggle button writes showSourceText; these two pick whichever list
+-- the user wants to see.
+Selectors:Register("detail.coordListVisible", function(state)
+    return not state.session.ui.showSourceText
+end)
+
+Selectors:Register("detail.sourceListVisible", function(state)
+    return state.session.ui.showSourceText == true
+end)
+
 Selectors:Register("detail.scopeButtonLabel", function(state)
     local CYCLES = VFN.Constants.CYCLES
     local scope = state.session.ui.sendScope or CYCLES.sendScope.default
@@ -864,6 +872,17 @@ Selectors:Register("config.backendHint", function(state)
     local v = state.account.config.waypointBackend or CYCLES.waypointBackend.default
     return (CYCLES.waypointBackend.hints and CYCLES.waypointBackend.hints[v]) or ""
 end)
+
+-- Theme picker: one active-state selector per available theme. The button
+-- binding reads `config.theme.active.<Name>` and the Skinner flips to the
+-- "active" treatment, so the current theme reads as pressed.
+local THEME_NAMES = (VFN_SchemeConstants and VFN_SchemeConstants._meta and VFN_SchemeConstants._meta.order) or {}
+for _, name in ipairs(THEME_NAMES) do
+    local pick = name  -- capture per-iteration name in the closure
+    Selectors:Register("config.theme.active." .. pick, function(state)
+        return state.account.config.scheme == pick
+    end)
+end
 
 -- ===========================================================================
 -- Drawer (map preview panel) selectors
@@ -940,3 +959,14 @@ Selectors:Register("library.filterAllActive",     libFilterIs("all"))
 Selectors:Register("library.filterReadyActive",   libFilterIs("ready"))
 Selectors:Register("library.filterHasNoteActive", libFilterIs("has_note"))
 Selectors:Register("library.filterBlockedActive", libFilterIs("blocked"))
+
+-- Drawer setNoteBody + applyLog (last imperative pushes retired from Drawer:Refresh).
+Selectors:Register("drawer.setNoteBody", function(state)
+    local set = drawerSet(state)
+    local note = set and set.payload and set.payload.note or ""
+    return note ~= "" and note or "No note for this set. Edit in Library."
+end)
+
+Selectors:Register("drawer.applyLog", function(state)
+    return Selectors.BuildApplyLogItems(state)
+end)

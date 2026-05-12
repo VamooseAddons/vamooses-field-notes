@@ -40,6 +40,14 @@ VFN.Rows:Register("applyLogRow", {
         end
         return ed.line
     end,
+    -- Log entries don't have a stable id; use the `at` timestamp + line
+    -- text as a composite identity. Two identical lines logged at the
+    -- same second are treated as the same row -- acceptable for an
+    -- append-only debug log.
+    key = function(ed)
+        if not ed then return "?" end
+        return tostring(ed.at or "?") .. ":" .. tostring(ed.line or "")
+    end,
 })
 
 local function HideDots(body)
@@ -64,35 +72,36 @@ local function ensurePin(body, parent, n)
     if pin.SetFrameLevel and parent.GetFrameLevel then
         pin:SetFrameLevel(parent:GetFrameLevel() + 10)  -- above map textures
     end
-    -- Hover affordance: scale the dot up 1.4x while hovered. Tooltip shows
-    -- map + coords + optional entry label (set at Configure time below).
+    -- Hover affordance: scale the dot up 1.4x while hovered.
     pin:SetScript("OnEnter", function(self)
         if self._dot and self._pinSize then
             self._dot:SetSize(self._pinSize * 1.4, self._pinSize * 1.4)
-        end
-        local tip = _G.GameTooltip
-        local d = self._data
-        if tip and d then
-            tip:SetOwner(self, "ANCHOR_RIGHT")
-            if d.label and d.label ~= "" then tip:AddLine(d.label) end
-            tip:AddLine(string.format("%s  %.1f, %.1f", d.mapName or "", d.rawX or 0, d.rawY or 0),
-                0.7, 0.7, 0.7)
-            tip:Show()
         end
     end)
     pin:SetScript("OnLeave", function(self)
         if self._dot and self._pinSize then
             self._dot:SetSize(self._pinSize, self._pinSize)
         end
-        if _G.GameTooltip then _G.GameTooltip:Hide() end
+    end)
+    -- Tooltip: function-form def so the engine re-evaluates pin._data on
+    -- each hover (dot data updates between hovers as the layer reconfigures).
+    -- TooltipEngine HookScripts on top of the scale-OnEnter above; both fire.
+    VFN.TooltipEngine:Attach(pin, function(self)
+        local d = self._data
+        if not d then return nil end
+        local def = {
+            extraLines = {
+                {
+                    text = string.format("%s  %.1f, %.1f", d.mapName or "", d.rawX or 0, d.rawY or 0),
+                    r = 0.7, g = 0.7, b = 0.7,
+                },
+            },
+        }
+        if d.label and d.label ~= "" then def.title = d.label end
+        return def
     end)
     body.dots[n] = pin
     return pin
-end
-
-function DrawerController:Wire(_rootFrame)
-    -- No interactive widgets in the drawer body today (event log + current
-    -- card are passive). Wire is a placeholder for future interactions.
 end
 
 function DrawerController:Refresh(rootFrame, ctx)
@@ -215,22 +224,9 @@ function DrawerController:Refresh(rootFrame, ctx)
         end
     end
 
-    -- Drawer title / subtitle / current-card text widgets are all bound to
-    -- drawer.* selectors -- BindingEngine pushes their values during the
-    -- pre-controller refresh. The pin painting above is the imperative
+    -- Drawer title / subtitle / current-card text / setNoteBody / applyLogList
+    -- all flow through bindings. The pin painting above is the imperative
     -- side-effect that bindings can't express.
-
-    -- Set-level note (read-only). Edited in the library tab; rendered here
-    -- so users have set context while navigating coords. Empty notes show
-    -- a dim prompt so the panel reads as "intentionally empty" not broken.
-    local setNote = (set and set.payload and set.payload.note) or ""
-    CH.UI.SetText(W(rootFrame, "drawerPanel.setNoteBody"),
-        setNote ~= "" and setNote or "No note for this set. Edit in Library.")
-
-    -- Apply log: rolling history of send/remove events (newest first).
-    local logItems = VFN.Selectors.BuildApplyLogItems(ctx.state or CH.Mechanics.GetState())
-    local list = W(rootFrame, "drawerPanel.applyLogList")
-    if list and list.SetItems then list:SetItems(logItems, true) end
 end
 
 VFN.Controllers:Register("drawer", DrawerController)

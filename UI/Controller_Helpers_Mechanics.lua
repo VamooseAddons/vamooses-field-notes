@@ -16,51 +16,40 @@ local Mech = VFN.ControllerHelpers.Mechanics
 -- ===== State readers ======================================================
 
 function Mech.GetState()
-    return VFN.Store and VFN.Store.GetState and VFN.Store:GetState() or nil
+    return VFN.Store:GetState()
 end
 
 -- Merged read-only UI view: union of account.ui (persisted) + session.ui
 -- (transient). Keys live in EXACTLY ONE bucket, but callers shouldn't have
--- to know which -- they read selectedSetID and selectedGroupKey the same way.
--- The reducer (VFN_UI_SET) routes writes to the correct bucket via its
--- PERSISTENT_UI_KEYS / SESSION_UI_KEYS tables.
+-- to know which -- they read selectedSetID and selectedGroupKey the same
+-- way. WRITES go through the explicit bucket-aware helpers below
+-- (SetUIPersistent / SetUITransient / SetUITransientView) which dispatch
+-- to UI_SET_PERSISTENT / UI_SET_TRANSIENT actions -- the bucket choice
+-- lives at the call site, not in a routing table.
+--
+-- Note: session.ui has nested sub-tables (.library / .stream / .config)
+-- for per-view scratch state. The merge exposes those as merged.library /
+-- merged.stream / merged.config -- but typical callers use the explicit
+-- per-view reader Mech.GetUIView(view) instead.
 function Mech.GetUI()
     local s = Mech.GetState()
-    if not s then return {} end
     local merged = {}
-    if s.account and s.account.ui then
-        for k, v in pairs(s.account.ui) do merged[k] = v end
-    end
-    if s.session and s.session.ui then
-        for k, v in pairs(s.session.ui) do merged[k] = v end
-    end
+    for k, v in pairs(s.account.ui) do merged[k] = v end
+    for k, v in pairs(s.session.ui) do merged[k] = v end
     return merged
 end
 
--- Explicit accessors for the rare case a caller really does need to know
--- which bucket a value lives in (debugging, persistence inspection).
-function Mech.GetAccountUI()
-    local s = Mech.GetState()
-    return s and s.account and s.account.ui or {}
-end
-function Mech.GetSessionUI()
-    local s = Mech.GetState()
-    return s and s.session and s.session.ui or {}
-end
-
--- View-local scratch state lives at state.session.viewLocal[view][key].
--- Use this instead of reaching into state.session.* directly.
-function Mech.GetViewLocal(view)
-    local s = Mech.GetState()
-    if not (s and s.session and s.session.viewLocal) then return {} end
-    return s.session.viewLocal[view] or {}
+-- Per-view scratch state lives at state.session.ui[view][key] after the
+-- viewLocal/ui bucket merge (#11.2). Use this instead of reaching into the
+-- session tree directly so future renames are local to this helper.
+function Mech.GetUIView(view)
+    return Mech.GetState().session.ui[view] or {}
 end
 
 function Mech.GetSelectedSet()
     local s = Mech.GetState()
-    if not s then return nil, nil, nil end
-    local selectedSetID = s.account and s.account.ui and s.account.ui.selectedSetID
-    local set = selectedSetID and s.account.sets and s.account.sets[selectedSetID] or nil
+    local selectedSetID = s.account.ui.selectedSetID
+    local set = selectedSetID and s.account.sets[selectedSetID] or nil
     if not set or set.deletedAt then return nil, nil, s end
     return selectedSetID, set, s
 end
@@ -72,9 +61,7 @@ function Mech.GetCurrentMapID()
 end
 
 function Mech.GetConfigValue(key, fallback)
-    local s = Mech.GetState()
-    local cfg = s and s.account and s.account.config or nil
-    local v = cfg and cfg[key] or nil
+    local v = Mech.GetState().account.config[key]
     if v == nil then return fallback end
     return v
 end
@@ -82,10 +69,10 @@ end
 -- ===== Dispatch wrappers + domain actions =================================
 
 -- Generic action dispatch wrapper. Single throat for cross-cutting concerns.
-function Mech.Dispatch(action, payload)
-    if VFN.Store and VFN.Store.Dispatch then
-        VFN.Store:Dispatch(action, payload)
-    end
+-- Accepts (actionType, payload) positional form for caller ergonomics and
+-- bundles into the canonical { type, payload } table Store:Dispatch expects.
+function Mech.Dispatch(actionType, payload)
+    VFN.Store:Dispatch({ type = actionType, payload = payload })
 end
 
 -- UI state has two buckets:
@@ -94,40 +81,45 @@ end
 -- Pick the right helper at the call site -- the bucket choice is now part
 -- of the action's name, not an external routing table.
 function Mech.SetUIPersistent(key, value)
-    if VFN.Store and VFN.Store.Dispatch then
-        VFN.Store:Dispatch(VFN.Constants.ACTIONS.UI_SET_PERSISTENT, { key = key, value = value })
-    end
+    VFN.Store:Dispatch({
+        type = VFN.Constants.ACTIONS.UI_SET_PERSISTENT,
+        payload = { key = key, value = value },
+    })
 end
 
 function Mech.SetUITransient(key, value)
-    if VFN.Store and VFN.Store.Dispatch then
-        VFN.Store:Dispatch(VFN.Constants.ACTIONS.UI_SET_TRANSIENT, { key = key, value = value })
-    end
+    VFN.Store:Dispatch({
+        type = VFN.Constants.ACTIONS.UI_SET_TRANSIENT,
+        payload = { key = key, value = value },
+    })
 end
 
-function Mech.DispatchViewLocal(view, key, value)
-    if VFN.Store and VFN.Store.Dispatch then
-        VFN.Store:Dispatch(VFN.Constants.ACTIONS.VIEWLOCAL_SET, { view = view, key = key, value = value })
-    end
+-- Per-view variant. Same action; payload.view picks the sub-bucket.
+-- session.ui[view][key] = value. Used by Library / Stream controllers
+-- for find-state, dropdown selections, edit staging, etc.
+function Mech.SetUITransientView(view, key, value)
+    VFN.Store:Dispatch({
+        type = VFN.Constants.ACTIONS.UI_SET_TRANSIENT,
+        payload = { view = view, key = key, value = value },
+    })
 end
 
 function Mech.CloseSet()
-    if VFN.Store and VFN.Store.CloseSet then VFN.Store:CloseSet() end
+    VFN.Store:CloseSet()
 end
 
 function Mech.OpenSet(setID)
-    if VFN.Store and VFN.Store.OpenSet then VFN.Store:OpenSet(setID) end
+    VFN.Store:OpenSet(setID)
 end
 
 function Mech.DeleteSet(setID)
-    if VFN.Store and VFN.Store.DeleteSet then VFN.Store:DeleteSet(setID) end
+    VFN.Store:DeleteSet(setID)
 end
 
 -- CreateSet returns the created { setID, set } table so callers can chain
 -- (e.g. open the new set immediately).
 function Mech.CreateSet(payload)
-    if VFN.Store and VFN.Store.CreateSet then return VFN.Store:CreateSet(payload) end
-    return nil
+    return VFN.Store:CreateSet(payload)
 end
 
 -- ===== Cycle helpers ======================================================
@@ -150,8 +142,7 @@ end
 -- and writes via SetUITransient. If a future cycle needs a persistent UI
 -- key, add a CycleUIPersistent twin -- explicit beats clever.
 function Mech.CycleUIValue(key, order)
-    local ui = (VFN.Store and VFN.Store:GetState().session.ui) or {}
-    local current = ui[key]
+    local current = VFN.Store:GetState().session.ui[key]
     local nextIndex = 1
     for index, value in ipairs(order) do
         if value == current then nextIndex = index + 1; break end
